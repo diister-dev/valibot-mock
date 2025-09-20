@@ -1,0 +1,30 @@
+{
+  "name": "@diister/valibot-mock",
+  "version": "0.0.1",
+  "description": "Generate mock data from Valibot schemas",
+  "license": "MIT",
+  "exports": "./mod.ts",
+  "imports": {
+    "@faker-js/faker": "npm:@faker-js/faker@10.0.0",
+    "randexp": "npm:randexp@0.5.3",
+    "valibot": "npm:valibot@1.1.0"
+  },
+  "publish": {
+    "include": [
+      "mod.ts",
+      "src/",
+      "README.md",
+      "LICENSE"
+    ]
+  },
+  "tasks": {
+    "dev": "deno run --watch mod.ts",
+    "test": "deno test --allow-all",
+    "check": "deno check mod.ts"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true
+  }
+}
