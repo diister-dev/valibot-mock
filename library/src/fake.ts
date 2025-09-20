@@ -31,7 +31,7 @@ import type { FakeGeneratorFn } from "./types.ts";
  * @param generator - Function that receives faker instance and context, returns the generated value
  * @returns A metadata transformation that can be used in a Valibot pipe
  */
-export function fake<T>(generator: FakeGeneratorFn<T>) {
+export function fake<TInput>(generator: FakeGeneratorFn<unknown>): v.MetadataAction<TInput, Record<string | symbol, unknown>> {
   return v.metadata({
     [Symbol.for("fake_generator")]: generator
   });
