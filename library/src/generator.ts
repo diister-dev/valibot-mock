@@ -251,6 +251,9 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
       let result = null;
       while (maxAttempts > 0) {
         result = customGenerator(faker, context);
+        if(result === VOID) {
+          result = undefined;
+        }
         const valid = v.safeParse(schema, result);
         if (valid.success) {
           return valid.output;
@@ -272,13 +275,16 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
     let result = null;
     while (maxAttempts > 0) {
       result = handler(schema, faker, context, options);
+      if(result === VOID) {
+        result = undefined;
+      }
       const valid = v.safeParse(schema, result);
       if (valid.success) {
         return valid.output;
       }
       maxAttempts--;
     }
-    console.error(`Failed to generate valid value for schema type: ${schema.type}`, result);
+    console.error(`Failed to generate valid value for schema type:`, schema, result);
     throw new Error(`Max attempts reached for schema type: ${schema.type}`);
   } else {
     console.warn(`No handler for type: ${schema.type}`);

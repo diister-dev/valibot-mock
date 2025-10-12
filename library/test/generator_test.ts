@@ -65,3 +65,37 @@ Deno.test("createMockGenerator - basic object generation", () => {
   assertEquals(typeof result.age, "number");
   assertEquals(typeof result.active, "boolean");
 });
+
+Deno.test("createMockGenerator - generates valid Date object for v.date()", () => {
+  const schema = v.date();
+  const generator = createMockGenerator(schema);
+  
+  const result = generator.generate();
+  
+  // Should be a Date object, not a string
+  assertEquals(result instanceof Date, true);
+  assertEquals(typeof result, "object");
+  assertEquals(Object.prototype.toString.call(result), "[object Date]");
+  
+  // Should be a valid date
+  assertEquals(isNaN(result.getTime()), false);
+});
+
+Deno.test("createMockGenerator - v.date() in object schema", () => {
+  const schema = v.object({
+    name: v.string(),
+    createdAt: v.date(),
+    updatedAt: v.date()
+  });
+  
+  const generator = createMockGenerator(schema);
+  const result = generator.generate();
+  
+  // Check that date fields are Date objects
+  assertEquals(result.createdAt instanceof Date, true);
+  assertEquals(result.updatedAt instanceof Date, true);
+  
+  // Should not be strings
+  assertEquals(typeof result.createdAt, "object");
+  assertEquals(typeof result.updatedAt, "object");
+});

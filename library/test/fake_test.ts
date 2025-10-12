@@ -45,3 +45,11 @@ Deno.test("fake function - works with different generator types", () => {
   const booleanResult = fake(booleanGenerator);
   assertEquals(booleanResult.type, "metadata");
 });
+
+Deno.test("getFakeGenerator - extracts generator from schema with fake metadata", () => {
+  const generator: FakeGeneratorFn<string> = (faker: Faker) => faker.person.firstName();
+  const schema = v.pipe(v.string(), fake(generator));
+  
+  const extracted = getFakeGenerator<string>(schema);
+  assertEquals(extracted, generator);
+});

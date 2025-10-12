@@ -78,3 +78,9 @@ console.log(JSON.stringify(complexData, (_key, value) => {
 }, 2));
 
 console.log("\n=== Example completed successfully! ===");
+
+const optionalAny = v.optional(v.any());
+const optionalUnknown = v.optional(v.unknown());
+
+const generation = createMockGenerator(optionalAny).generate();
+console.log("Generated optional any:", generation);
