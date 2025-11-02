@@ -243,6 +243,21 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
     return faker.lorem.word();
   }
   
+  // Handle piped schemas that contain another complete schema (recursively)
+  // This happens when you do: v.pipe(existingSchema, v.metadata(...))
+  // We need to unwrap nested pipes to find the actual base schema
+  while (schema.pipe && Array.isArray(schema.pipe)) {
+    const firstItem = schema.pipe[0];
+    // If the first item in the pipe is itself a complete schema with its own pipe
+    if (firstItem && typeof firstItem === 'object' && firstItem.pipe && firstItem.type === schema.type) {
+      // Use the nested schema as the base for generation
+      schema = firstItem;
+    } else {
+      // No more nested schemas, break the loop
+      break;
+    }
+  }
+  
   // First, check if schema has a custom fake generator
   const customGenerator = getFakeGenerator(schema);
   if (customGenerator) {
