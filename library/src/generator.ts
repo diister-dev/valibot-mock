@@ -250,19 +250,33 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
     return faker.lorem.word();
   }
   
+  // Keep the original schema for validation (includes all constraints)
+  const originalSchema = schema;
+  
   // Handle piped schemas that contain another complete schema (recursively)
   // This happens when you do: v.pipe(existingSchema, v.metadata(...))
-  // We need to unwrap nested pipes to find the actual base schema
+  // We need to unwrap nested pipes to find the actual base schema for type detection
+  // BUT we need to preserve all pipe constraints from outer schemas
+  const allPipeItems: any[] = [];
   while (schema.pipe && Array.isArray(schema.pipe)) {
     const firstItem = schema.pipe[0];
     // If the first item in the pipe is itself a complete schema with its own pipe
     if (firstItem && typeof firstItem === 'object' && firstItem.pipe && firstItem.type === schema.type) {
+      // Collect non-schema pipe items from current level (like metadata)
+      const nonSchemaPipes = schema.pipe.slice(1);
+      allPipeItems.unshift(...nonSchemaPipes);
       // Use the nested schema as the base for generation
       schema = firstItem;
     } else {
-      // No more nested schemas, break the loop
+      // No more nested schemas, collect all remaining pipes
+      allPipeItems.unshift(...schema.pipe);
       break;
     }
+  }
+  
+  // If we unwrapped schemas, reconstruct the pipe with all constraints
+  if (allPipeItems.length > 0 && schema !== originalSchema) {
+    schema = { ...schema, pipe: allPipeItems };
   }
   
   // First, check if schema has a custom fake generator
@@ -276,7 +290,7 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
         if(result === VOID) {
           result = undefined;
         }
-        const valid = v.safeParse(schema, result);
+        const valid = v.safeParse(originalSchema, result);
         if (valid.success) {
           return valid.output;
         }
@@ -300,7 +314,7 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
       if(result === VOID) {
         result = undefined;
       }
-      const valid = v.safeParse(schema, result);
+      const valid = v.safeParse(originalSchema, result);
       if (valid.success) {
         return valid.output;
       }
