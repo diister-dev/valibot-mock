@@ -1,6 +1,6 @@
 {
   "name": "@diister/valibot-mock",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Generate mock data from Valibot schemas",
   "license": "MIT",
   "exports": "./mod.ts",
