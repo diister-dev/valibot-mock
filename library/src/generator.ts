@@ -97,14 +97,30 @@ const schemaHandlers = {
 
     if (regex) {
       const randexp = new RandExp(regex);
-      // Adjust max length based on schema constraints
-      if (minLength > 0 || maxLength < options.defaultStringMaxLength) {
-        // If we have length constraints, use them to guide generation
-        const targetMax = maxLength < options.defaultStringMaxLength ? maxLength : minLength > 10 ? minLength : 10;
-        randexp.max = targetMax;
-      } else {
-        randexp.max = 10;
+      
+      // Configure max length for randexp generation
+      const effectiveMaxLength = maxLength < options.defaultStringMaxLength ? maxLength : options.defaultStringMaxLength;
+      randexp.max = effectiveMaxLength;
+      
+      // If we have length constraints, retry to match them
+      if (minLength > 0 && minLength === maxLength) {
+        // Exact length required
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const result = randexp.gen();
+          if (result.length === minLength) {
+            return result;
+          }
+        }
+      } else if (minLength > 0) {
+        // Length range
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const result = randexp.gen();
+          if (result.length >= minLength && result.length <= effectiveMaxLength) {
+            return result;
+          }
+        }
       }
+      
       return randexp.gen();
     }
 
