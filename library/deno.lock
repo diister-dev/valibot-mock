@@ -3,6 +3,8 @@
   "specifiers": {
     "jsr:@std/assert@1": "1.0.14",
     "jsr:@std/internal@^1.0.10": "1.0.10",
+    "npm:@eslint-community/regexpp@4.12.2": "4.12.2",
+    "npm:@eslint-community/regexpp@^4.12.2": "4.12.2",
     "npm:@faker-js/faker@10.0.0": "10.0.0",
     "npm:randexp@0.5.3": "0.5.3",
     "npm:valibot@1.1.0": "1.1.0"
@@ -19,6 +21,9 @@
     }
   },
   "npm": {
+    "@eslint-community/regexpp@4.12.2": {
+      "integrity": "sha512-EriSTlt5OC9/7SXkRSCAhfSxxoSUgBm33OH+IkwbdpgoqsSsUg7y3uh+IICI/Qg4BBWr3U2i39RpmycbxMq4ew=="
+    },
     "@faker-js/faker@10.0.0": {
       "integrity": "sha512-UollFEUkVXutsaP+Vndjxar40Gs5JL2HeLcl8xO1QAjJgOdhc3OmBFWyEylS+RddWaaBiAzH+5/17PLQJwDiLw=="
     },
@@ -42,6 +47,7 @@
   "workspace": {
     "dependencies": [
       "jsr:@std/assert@1",
+      "npm:@eslint-community/regexpp@^4.12.2",
       "npm:@faker-js/faker@10.0.0",
       "npm:randexp@0.5.3",
       "npm:valibot@1.1.0"

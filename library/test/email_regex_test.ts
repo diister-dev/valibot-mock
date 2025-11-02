@@ -13,6 +13,8 @@ const EMAIL_REGEX = /^[a-zA-Z0-9\+\-_]+(\.[a-zA-Z0-9\+\-_]+)*@[a-z0-9]+(-[a-z0-9
 const EmailSchema = v.pipe(
   v.string(),
   v.regex(EMAIL_REGEX),
+  v.minLength(5),
+  v.maxLength(254),
 );
 
 Deno.test("Email: complex regex pattern", () => {

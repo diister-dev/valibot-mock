@@ -1,10 +1,11 @@
 {
   "name": "@diister/valibot-mock",
-  "version": "0.0.6",
+  "version": "0.1.0",
   "description": "Generate mock data from Valibot schemas",
   "license": "MIT",
   "exports": "./mod.ts",
   "imports": {
+    "@eslint-community/regexpp": "npm:@eslint-community/regexpp@^4.12.2",
     "@faker-js/faker": "npm:@faker-js/faker@10.0.0",
     "randexp": "npm:randexp@0.5.3",
     "valibot": "npm:valibot@1.1.0",

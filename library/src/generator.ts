@@ -4,6 +4,7 @@ import RandExp from "randexp";
 
 import type { MockGeneratorOptions, MockGenerator, ResolvedMockGeneratorOptions } from "./types.ts";
 import { getFakeGenerator } from "./fake.ts";
+import { regexToStringMinMax } from "./regex-parser.ts";
 
 const VOID = Symbol("void");
 
@@ -96,32 +97,29 @@ const schemaHandlers = {
     }
 
     if (regex) {
-      const randexp = new RandExp(regex);
+      const result = regexToStringMinMax(regex, minLength, maxLength, {
+        preferLazy: false,
+        generateCandidates: true,
+        candidateCount: 5,
+      });
       
-      // Configure max length for randexp generation
-      const effectiveMaxLength = maxLength < options.defaultStringMaxLength ? maxLength : options.defaultStringMaxLength;
-      randexp.max = effectiveMaxLength;
-      
-      // If we have length constraints, retry to match them
-      if (minLength > 0 && minLength === maxLength) {
-        // Exact length required
-        for (let attempt = 0; attempt < 50; attempt++) {
-          const result = randexp.gen();
-          if (result.length === minLength) {
-            return result;
-          }
-        }
-      } else if (minLength > 0) {
-        // Length range
-        for (let attempt = 0; attempt < 50; attempt++) {
-          const result = randexp.gen();
-          if (result.length >= minLength && result.length <= effectiveMaxLength) {
-            return result;
-          }
+      if (result.candidates && result.candidates.length > 0) {
+        const randomIndex = faker.number.int({ min: 0, max: result.candidates.length - 1 });
+        const selectedCandidate = result.candidates[randomIndex];
+        
+        if (selectedCandidate) {
+          const randexp = new RandExp(selectedCandidate.regex);
+          randexp.max = selectedCandidate.maxLength ?? maxLength;
+          
+          const generated = randexp.gen();
+          return generated;
         }
       }
       
-      return randexp.gen();
+      const randexp = new RandExp(result.transformed);
+      randexp.max = result.actualMaxLength ?? maxLength;
+      const generated = randexp.gen();
+      return generated;
     }
 
     const length = faker.number.int({ min: Math.max(0, minLength), max: Math.min(maxLength, options.defaultStringMaxLength) });
@@ -359,7 +357,7 @@ export function createMockGenerator<TSchema extends v.GenericSchema>(
     faker: new Faker(options.faker || {
         locale: [en],
     }),
-    maxAttempts: options.maxAttempts ?? 10,
+    maxAttempts: options.maxAttempts ?? 100,
     defaultArrayMaxLength: options.defaultArrayMaxLength ?? 10,
     defaultStringMaxLength: options.defaultStringMaxLength ?? 20
   };
