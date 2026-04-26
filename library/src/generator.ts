@@ -172,12 +172,12 @@ const schemaHandlers = {
   'record': (schema: any, faker: Faker, context: any, options: any) => {
     const keyCount = faker.number.int({ min: 1, max: 5 });
     const result: Record<string, any> = {};
-    
+
     for (let i = 0; i < keyCount; i++) {
-      const key = faker.string.alphanumeric(8);
+      const key = handleSchema(schema.key, faker, context, options);
       result[key] = handleSchema(schema.value, faker, context, options);
     }
-    
+
     return result;
   },
   
