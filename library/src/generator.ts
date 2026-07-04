@@ -4,6 +4,7 @@ import RandExp from "randexp";
 
 import type { MockGeneratorOptions, MockGenerator, ResolvedMockGeneratorOptions } from "./types.ts";
 import { getFakeGenerator } from "./fake.ts";
+import { DEFAULT_SEMANTICS, resolveSemantic } from "./semantics.ts";
 import { regexToStringMinMax } from "./regex-parser.ts";
 
 const VOID = Symbol("void");
@@ -122,6 +123,22 @@ const schemaHandlers = {
       return generated;
     }
 
+    // Semantic tier: an unconstrained string whose ENTRY KEY carries meaning
+    // (firstname, email, city…) gets a realistic value. Runs after every
+    // validator-driven branch above (constraints win) and before the random
+    // fallback. Length bounds still apply: too long → truncated, too short →
+    // fall through to the random generator (never emit an invalid value).
+    if (options.semantics) {
+      const key = typeof context?.path === 'string' ? context.path.split('.').pop() : undefined;
+      const semantic = resolveSemantic(key, options.semantics);
+      if (semantic) {
+        const value = String(semantic(faker)).slice(0, maxLength);
+        if (value.length >= minLength) {
+          return value;
+        }
+      }
+    }
+
     const length = faker.number.int({ min: Math.max(0, minLength), max: Math.min(maxLength, options.defaultStringMaxLength) });
     return faker.string.alphanumeric(length);
   },
@@ -150,9 +167,9 @@ const schemaHandlers = {
     return BigInt(faker.number.int({ min: numMin, max: numMax }));
   },
   
-  'boolean': (schema: any, faker: Faker) => faker.datatype.boolean(),
-  
-  'date': (schema: any, faker: Faker) => faker.date.past(),
+  'boolean': (_schema: any, faker: Faker) => faker.datatype.boolean(),
+
+  'date': (_schema: any, faker: Faker) => faker.date.past(),
   
   'nullable': (schema: any, faker: Faker, context: any, options: any) => {
     const shouldBeNull = faker.datatype.boolean({ probability: 0.2 });
@@ -232,31 +249,37 @@ const schemaHandlers = {
     return handleSchema(resolvedSchema, faker, context, options);
   },
   
-  'custom': (schema: any, faker: Faker) => faker.lorem.word(),
+  'custom': (_schema: any, faker: Faker) => faker.lorem.word(),
   'brand': (schema: any, faker: Faker, context: any, options: any) => {
     // Brand schemas wrap another schema in the 'name' property
     return handleSchema(schema.name, faker, context, options);
   },
-  'unknown': (schema: any, faker: Faker) => faker.lorem.word(),
-  'any': (schema: any, faker: Faker) => faker.lorem.word(),
+  'unknown': (_schema: any, faker: Faker) => faker.lorem.word(),
+  'any': (_schema: any, faker: Faker) => faker.lorem.word(),
   
   'null': () => null,
   'undefined': () => undefined,
   'void': () => undefined,
   'never': () => { throw new Error("Never schema cannot be generated"); },
   
-  'file': (schema: any, faker: Faker) => {
+  'file': (_schema: any, faker: Faker) => {
     const fileName = faker.system.fileName();
     const content = faker.lorem.paragraphs();
     const blob = new Blob([content], { type: 'text/plain' });
     return new File([blob], fileName, { type: 'text/plain' });
   },
   
-  'blob': (schema: any, faker: Faker) => {
+  'blob': (_schema: any, faker: Faker) => {
     const content = faker.lorem.paragraphs();
     return new Blob([content], { type: 'text/plain' });
   }
 };
+
+// loose/strict objects expose the same .entries shape as object — identical
+// generation (a loose object's mock needs no extra unknown keys; a strict
+// object's mock must not have any).
+(schemaHandlers as Record<string, unknown>)['loose_object'] = schemaHandlers['object'];
+(schemaHandlers as Record<string, unknown>)['strict_object'] = schemaHandlers['object'];
 
 function handleSchema(schema: any, faker: Faker, context: any, options: any): any {
   if (!schema) {
@@ -359,16 +382,38 @@ export function createMockGenerator<TSchema extends v.GenericSchema>(
     }),
     maxAttempts: options.maxAttempts ?? 100,
     defaultArrayMaxLength: options.defaultArrayMaxLength ?? 10,
-    defaultStringMaxLength: options.defaultStringMaxLength ?? 20
+    defaultStringMaxLength: options.defaultStringMaxLength ?? 20,
+    semantics: options.semantics === false
+      ? null
+      : { ...DEFAULT_SEMANTICS, ...(options.semantics ?? {}) }
   };
-
-  function generate(): v.InferOutput<TSchema> {
-    const context = { path: "" };
-    return handleSchema(schema, resolvedOptions.faker, context, resolvedOptions);
+  // The documented `seed` option — Faker's constructor ignores it; it must be
+  // applied explicitly for deterministic output.
+  if (options.faker?.seed !== undefined) {
+    resolvedOptions.faker.seed(options.faker.seed);
   }
 
-  function generateMany(count: number): v.InferOutput<TSchema>[] {
-    return Array.from({ length: count }, () => generate());
+  function generate(overrides?: Partial<v.InferOutput<TSchema>>): v.InferOutput<TSchema> {
+    const context = { path: "" };
+    const result = handleSchema(schema, resolvedOptions.faker, context, resolvedOptions);
+    // For object schemas, `overrides` replace the corresponding generated fields.
+    // This is the first-class way to inject referential-integrity values
+    // (existing ids), fixed enums, or any caller-controlled value — instead of
+    // spread-merging the result after the fact.
+    if (overrides && result !== null && typeof result === "object" && !Array.isArray(result)) {
+      return { ...result, ...overrides };
+    }
+    return result;
+  }
+
+  function generateMany(
+    count: number,
+    overrides?: Partial<v.InferOutput<TSchema>> | ((index: number) => Partial<v.InferOutput<TSchema>>),
+  ): v.InferOutput<TSchema>[] {
+    return Array.from(
+      { length: count },
+      (_unused, index) => generate(typeof overrides === "function" ? overrides(index) : overrides),
+    );
   }
 
   return {
