@@ -65,7 +65,8 @@ const schemaHandlers = {
   },
   
   'string': (schema: any, faker: Faker, context: any, options: any) => {
-    const maxLength = schema.pipe?.find((pipe: any) => pipe.type === 'max_length')?.requirement ?? options.defaultStringMaxLength;
+    const explicitMaxLength = schema.pipe?.find((pipe: any) => pipe.type === 'max_length')?.requirement;
+    const maxLength = explicitMaxLength ?? options.defaultStringMaxLength;
     const minLength = schema.pipe?.find((pipe: any) => pipe.type === 'min_length')?.requirement ?? 0;
     const regex = schema.pipe?.find((pipe: any) => pipe.type === 'regex')?.requirement ?? null;
     const isoTimestamp = schema.pipe?.find((pipe: any) => pipe.type === 'iso_timestamp')?.requirement ?? false;
@@ -126,15 +127,23 @@ const schemaHandlers = {
     // Semantic tier: an unconstrained string whose ENTRY KEY carries meaning
     // (firstname, email, city…) gets a realistic value. Runs after every
     // validator-driven branch above (constraints win) and before the random
-    // fallback. Length bounds still apply: too long → truncated, too short →
-    // fall through to the random generator (never emit an invalid value).
+    // fallback. Length bounds: only an EXPLICIT max_length constrains a
+    // semantic value — the DEFAULT cap exists to bound random noise, not to
+    // mutilate realistic values (a truncated email is invalid). Out of
+    // bounds → REGENERATE a few times, else fall through to the random
+    // generator (never emit a truncated/invalid value).
     if (options.semantics) {
       const key = typeof context?.path === 'string' ? context.path.split('.').pop() : undefined;
       const semantic = resolveSemantic(key, options.semantics);
       if (semantic) {
-        const value = String(semantic(faker)).slice(0, maxLength);
-        if (value.length >= minLength) {
-          return value;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const value = String(semantic(faker));
+          if (
+            value.length >= minLength &&
+            (explicitMaxLength === undefined || value.length <= explicitMaxLength)
+          ) {
+            return value;
+          }
         }
       }
     }
@@ -377,9 +386,9 @@ export function createMockGenerator<TSchema extends v.GenericSchema>(
   options: MockGeneratorOptions = {}
 ): MockGenerator<TSchema> {
   const resolvedOptions: ResolvedMockGeneratorOptions = {
-    faker: new Faker(options.faker || {
-        locale: [en],
-    }),
+    // Merge over the locale default: a partial `{ seed }` must not drop the
+    // locale (Faker's constructor requires one).
+    faker: new Faker({ locale: [en], ...(options.faker ?? {}) }),
     maxAttempts: options.maxAttempts ?? 100,
     defaultArrayMaxLength: options.defaultArrayMaxLength ?? 10,
     defaultStringMaxLength: options.defaultStringMaxLength ?? 20,

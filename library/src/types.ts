@@ -10,7 +10,8 @@ export interface MockGeneratorOptions {
    * Faker configuration
    */
   faker?: {
-    locale: LocaleDefinition | LocaleDefinition[];
+    /** Defaults to English when omitted (partial options are merged). */
+    locale?: LocaleDefinition | LocaleDefinition[];
     randomizer?: Randomizer;
     seed?: number;
 };
