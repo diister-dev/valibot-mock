@@ -76,6 +76,8 @@ export {
 // Re-export utility types and functions
 export type { VOID, FakeGeneratorFn } from "./src/types.ts";
 export { fake } from "./src/fake.ts";
+export type { SemanticGenerator } from "./src/semantics.ts";
+export { DEFAULT_SEMANTICS, normalizeSemanticKey } from "./src/semantics.ts";
 
 // Export commonly used Faker locales for convenience
 import { 

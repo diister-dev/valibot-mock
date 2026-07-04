@@ -1,5 +1,6 @@
 import type * as v from "valibot";
 import type { LocaleDefinition, Faker, Randomizer } from "@faker-js/faker";
+import type { SemanticGenerator } from "./semantics.ts";
 
 /**
  * Configuration for the mock generator
@@ -31,6 +32,17 @@ export interface MockGeneratorOptions {
    * @default 1048575 (2^20 - 1)
    */
   defaultStringMaxLength?: number;
+
+  /**
+   * Semantic field-name generation for plain strings: an entry key like
+   * `firstname` or `email` yields a realistic value instead of random
+   * alphanumerics. `false` disables the tier entirely; a record EXTENDS or
+   * overrides the built-in table (normalized keys — see
+   * `normalizeSemanticKey`). Explicit `fake()` metadata and validator pipes
+   * (`v.email()`, `v.regex()`…) always take precedence.
+   * @default built-in table (DEFAULT_SEMANTICS)
+   */
+  semantics?: false | Readonly<Record<string, SemanticGenerator>>;
 }
 
 /**
@@ -41,6 +53,8 @@ export interface ResolvedMockGeneratorOptions {
   maxAttempts: number;
   defaultArrayMaxLength: number;
   defaultStringMaxLength: number;
+  /** null = tier disabled; a record = consumer table merged over defaults at resolve time. */
+  semantics: Readonly<Record<string, SemanticGenerator>> | null;
 }
 
 /**
@@ -57,14 +71,25 @@ export interface GenerationContext {
  */
 export interface MockGenerator<TSchema extends v.GenericSchema> {
   /**
-   * Generate a single mocked value based on the schema
+   * Generate a single mocked value based on the schema.
+   *
+   * @param overrides For object schemas, values that REPLACE the corresponding
+   * generated top-level fields — the first-class way to inject
+   * referential-integrity values (existing ids), fixed enums, or any
+   * caller-controlled value.
    */
-  generate(): v.InferOutput<TSchema>;
-  
+  generate(overrides?: Partial<v.InferOutput<TSchema>>): v.InferOutput<TSchema>;
+
   /**
-   * Generate multiple mocked values
+   * Generate multiple mocked values.
+   *
+   * @param overrides Applied to every item, or a function producing per-index
+   * overrides (e.g. a distinct existing id per row).
    */
-  generateMany(count: number): v.InferOutput<TSchema>[];
+  generateMany(
+    count: number,
+    overrides?: Partial<v.InferOutput<TSchema>> | ((index: number) => Partial<v.InferOutput<TSchema>>),
+  ): v.InferOutput<TSchema>[];
 }
 
 /**
