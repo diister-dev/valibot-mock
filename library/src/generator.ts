@@ -68,7 +68,17 @@ const schemaHandlers = {
     const explicitMaxLength = schema.pipe?.find((pipe: any) => pipe.type === 'max_length')?.requirement;
     const maxLength = explicitMaxLength ?? options.defaultStringMaxLength;
     const minLength = schema.pipe?.find((pipe: any) => pipe.type === 'min_length')?.requirement ?? 0;
-    const regex = schema.pipe?.find((pipe: any) => pipe.type === 'regex')?.requirement ?? null;
+    // Any validation action carrying a RegExp requirement can drive the
+    // regex-based generator — not only `v.regex()`. Valibot ships many
+    // regex-backed actions with their own type names (`hex_color`,
+    // `iso_date`, `ulid`, `slug`, `hexadecimal`, `nanoid`, …); matching on
+    // `type === 'regex'` alone made them fall through to the random-string
+    // fallback, which then failed validation until maxAttempts exhausted.
+    // Actions with a dedicated faker path above (email/url/uuid/ip,
+    // iso_timestamp) return before this branch is reached.
+    const regex = schema.pipe?.find((pipe: any) =>
+      pipe.kind === 'validation' && pipe.requirement instanceof RegExp
+    )?.requirement ?? null;
     const isoTimestamp = schema.pipe?.find((pipe: any) => pipe.type === 'iso_timestamp')?.requirement ?? false;
 
     // Check for specific validation pipes
