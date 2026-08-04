@@ -42,7 +42,12 @@ const schemaHandlers = {
   
   'array': (schema: any, faker: Faker, context: any, options: any) => {
     const minLength = schema.pipe?.find((pipe: any) => pipe.type === 'min_length')?.requirement ?? 0;
-    const maxLength = schema.pipe?.find((pipe: any) => pipe.type === 'max_length')?.requirement ?? options.defaultArrayMaxLength;
+    const explicitMaxLength = schema.pipe?.find((pipe: any) => pipe.type === 'max_length')?.requirement;
+    
+    const maxLength = Math.max(
+      minLength,
+      Math.min(explicitMaxLength ?? options.defaultArrayMaxLength, options.defaultArrayMaxLength),
+    );
     const length = faker.number.int({ min: minLength, max: maxLength });
     const result = [];
     for (let i = 0; i < length; i++) {
