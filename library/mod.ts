@@ -75,6 +75,8 @@ export {
 
 // Re-export utility types and functions
 export type { VOID, FakeGeneratorFn } from "./src/types.ts";
+export { SKIP } from "./src/types.ts";
+export type { ResolveNode, GenerationContext, MockGeneratorOptions, MockGenerator } from "./src/types.ts";
 export { fake } from "./src/fake.ts";
 export type { SemanticGenerator } from "./src/semantics.ts";
 export { DEFAULT_SEMANTICS, normalizeSemanticKey } from "./src/semantics.ts";

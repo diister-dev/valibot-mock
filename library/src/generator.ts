@@ -3,6 +3,7 @@ import { Faker, en } from "@faker-js/faker";
 import RandExp from "randexp";
 
 import type { MockGeneratorOptions, MockGenerator, ResolvedMockGeneratorOptions } from "./types.ts";
+import { SKIP } from "./types.ts";
 import { getFakeGenerator } from "./fake.ts";
 import { DEFAULT_SEMANTICS, resolveSemantic } from "./semantics.ts";
 import { regexToStringMinMax } from "./regex-parser.ts";
@@ -62,7 +63,13 @@ const schemaHandlers = {
     const length = faker.number.int({ min: minLength, max: maxLength });
     const result = [];
     for (let i = 0; i < length; i++) {
-      result.push(handleSchema(schema.item, faker, context, options));
+      // Index in the path so per-path resolve hooks can address individual
+      // items ("refs.0"); the semantic tier ignores numeric segments.
+      const itemContext = {
+        ...context,
+        path: context.path ? `${context.path}.${i}` : `${i}`
+      };
+      result.push(handleSchema(schema.item, faker, itemContext, options));
     }
     return result;
   },
@@ -159,7 +166,12 @@ const schemaHandlers = {
     // bounds → REGENERATE a few times, else fall through to the random
     // generator (never emit a truncated/invalid value).
     if (options.semantics) {
-      const key = typeof context?.path === 'string' ? context.path.split('.').pop() : undefined;
+      // Numeric segments are array/tuple indices, not keys: for "email.0" the
+      // meaningful key is still "email" (items inherit the enclosing key's
+      // semantic, as they did before paths carried indices).
+      const key = typeof context?.path === 'string'
+        ? context.path.split('.').filter((segment: string) => !/^\d+$/.test(segment)).pop()
+        : undefined;
       const semantic = resolveSemantic(key, options.semantics);
       if (semantic) {
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -258,7 +270,13 @@ const schemaHandlers = {
   },
   
   'tuple': (schema: any, faker: Faker, context: any, options: any) => {
-    return schema.items.map((itemSchema: any) => handleSchema(itemSchema, faker, context, options));
+    return schema.items.map((itemSchema: any, index: number) => {
+      const itemContext = {
+        ...context,
+        path: context.path ? `${context.path}.${index}` : `${index}`
+      };
+      return handleSchema(itemSchema, faker, itemContext, options);
+    });
   },
   
   'variant': (schema: any, faker: Faker, context: any, options: any) => {
@@ -351,6 +369,29 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
     schema = { ...schema, pipe: allPipeItems };
   }
   
+  // Caller-side resolution hook — outranks fake() metadata and semantics
+  // because it belongs to the CALLER, who has generation-time knowledge the
+  // schema author cannot have (correlated ids across collections); SKIP falls
+  // through so the schema-owned channels keep working. Consulted here, after
+  // pipe unwrapping, so `node.schema.pipe` exposes resolved constraints
+  // (RegExp requirements included).
+  if (options.resolve) {
+    const resolved = options.resolve({ schema, path: context?.path ?? "", faker });
+    if (resolved !== SKIP) {
+      // Same validation gate as generated values — silently accepting an
+      // invalid injected value is exactly the generate(overrides) flaw this
+      // hook must not reproduce.
+      const valid = v.safeParse(originalSchema, resolved);
+      if (!valid.success) {
+        const details = valid.issues.map((issue) => issue.message).join("; ");
+        throw new Error(
+          `resolve() returned an invalid value at path "${context?.path ?? ""}" (schema type "${schema.type}"): ${details}`,
+        );
+      }
+      return valid.output;
+    }
+  }
+
   // First, check if schema has a custom fake generator
   const customGenerator = getFakeGenerator(schema);
   if (customGenerator) {
@@ -420,7 +461,8 @@ export function createMockGenerator<TSchema extends v.GenericSchema>(
     defaultStringMaxLength: options.defaultStringMaxLength ?? 20,
     semantics: options.semantics === false
       ? null
-      : { ...DEFAULT_SEMANTICS, ...(options.semantics ?? {}) }
+      : { ...DEFAULT_SEMANTICS, ...(options.semantics ?? {}) },
+    resolve: options.resolve ?? null
   };
   // The documented `seed` option — Faker's constructor ignores it; it must be
   // applied explicitly for deterministic output.
