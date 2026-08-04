@@ -9,6 +9,17 @@ import { regexToStringMinMax } from "./regex-parser.ts";
 
 const VOID = Symbol("void");
 
+// RandExp draws from Math.random() internally, which defeats `faker: { seed }`
+// for EVERY regex-backed value (so every mocked identifier). Its instance
+// `randInt` overrides the prototype's, so route all draws through the
+// generator's faker instead.
+function createSeededRandExp(pattern: RegExp | string, faker: Faker): RandExp {
+  const randexp = new RandExp(pattern);
+  (randexp as unknown as { randInt: (a: number, b: number) => number }).randInt =
+    (a, b) => faker.number.int({ min: a, max: b });
+  return randexp;
+}
+
 const schemaHandlers = {
   'union': (schema: any, faker: Faker, context: any, options: any) => {
     const choice = faker.number.int({ min: 0, max: schema.options.length - 1 });
@@ -125,15 +136,15 @@ const schemaHandlers = {
         const selectedCandidate = result.candidates[randomIndex];
         
         if (selectedCandidate) {
-          const randexp = new RandExp(selectedCandidate.regex);
+          const randexp = createSeededRandExp(selectedCandidate.regex, faker);
           randexp.max = selectedCandidate.maxLength ?? maxLength;
-          
+
           const generated = randexp.gen();
           return generated;
         }
       }
-      
-      const randexp = new RandExp(result.transformed);
+
+      const randexp = createSeededRandExp(result.transformed, faker);
       randexp.max = result.actualMaxLength ?? maxLength;
       const generated = randexp.gen();
       return generated;
