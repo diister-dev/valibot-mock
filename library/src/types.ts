@@ -3,10 +3,9 @@ import type { LocaleDefinition, Faker, Randomizer } from "@faker-js/faker";
 import type { SemanticGenerator } from "./semantics.ts";
 
 /**
- * Sentinel returned by a `resolve` hook to decline a node: "I do not provide
- * this value — generate it normally". A dedicated symbol (not the internal
- * `VOID`) because declining a node and resolving it to an absent optional are
- * different answers, and the two channels must stay distinguishable.
+ * Sentinel a `resolve` hook returns to decline a node (falls through to
+ * normal generation). Distinct from the internal `VOID`: declining a node
+ * and resolving it to an absent optional are different answers.
  */
 export const SKIP: unique symbol = Symbol("valibot-mock/skip");
 
@@ -15,17 +14,15 @@ export const SKIP: unique symbol = Symbol("valibot-mock/skip");
  */
 export interface ResolveNode {
   /**
-   * The schema at this node, already unwrapped: nested pipes are flattened,
-   * so validation constraints are directly visible in `schema.pipe` (e.g. a
-   * `requirement: RegExp` for regex-backed actions). Typed `unknown` because
-   * inspecting it means reading valibot internals — narrow it on your side.
+   * The schema at this node, already unwrapped so validation constraints
+   * (e.g. a RegExp `requirement`) are visible in `schema.pipe`. Typed
+   * `unknown` — reading it means reading valibot internals; narrow it yourself.
    */
   schema: unknown;
   /**
-   * Dot-separated path from the root (`""` at the root itself). Array and
-   * tuple indices are included: `"users.0.id"`. Wrapper nodes (`optional`,
-   * `nullable`, `union`…) share the path of the value they wrap; the wrapper
-   * is offered first, so the first match wins.
+   * Dot-separated path from the root (`""` at the root), indices included
+   * (`"users.0.id"`). Wrapper nodes (`optional`, `union`…) share the path of
+   * the value they wrap and are offered first, so the first match wins.
    */
   path: string;
   /**
@@ -80,20 +77,9 @@ export interface MockGeneratorOptions {
   semantics?: false | Readonly<Record<string, SemanticGenerator>>;
 
   /**
-   * Caller-side resolution hook, consulted at EVERY node — any depth,
-   * wrapper nodes included — before anything else. Precedence: `resolve` >
-   * `fake()` metadata > semantics > default generation. The hook belongs to
-   * the CALLER, who has generation-time knowledge the schema author cannot
-   * have (correlated ids across collections, fixed foreign keys…), while
-   * `fake()` is a definition-time default; returning {@link SKIP} declines
-   * the node and falls through to those channels, so no expressiveness is
-   * lost by ranking the hook first.
-   *
-   * A resolved value goes through the SAME `v.safeParse` gate as generated
-   * values; an invalid value THROWS with the node's path (unlike
-   * `generate(overrides)`, which spreads after validation). When an
-   * object/array node is resolved, its subtree is NOT visited — the resolved
-   * value covers it whole.
+   * Caller-side hook consulted at every node (any depth), ranked above
+   * fake() and semantics. Return {@link SKIP} to fall through; a resolved
+   * value is validated like generated ones and its subtree is not visited.
    */
   resolve?: (node: ResolveNode) => unknown;
 }
@@ -113,13 +99,9 @@ export interface ResolvedMockGeneratorOptions {
 }
 
 /**
- * Shared generation context between handlers.
- *
- * `path` is the dot-separated location from the root, indices included
- * (`"users.0.id"`, `""` at the root) — the same string handed to `resolve`
- * hooks. Former declared fields `depth`/`references` were never populated at
- * runtime (any read yielded `undefined` despite the type), so they were
- * removed rather than kept as a lie.
+ * Shared generation context between handlers. `path` is the dot-separated
+ * location from the root (indices included, `""` at the root) — the same
+ * string handed to `resolve` hooks.
  */
 export interface GenerationContext {
   path: string;

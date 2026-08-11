@@ -1,8 +1,7 @@
 /**
  * Locks path fidelity in GenerationContext / ResolveNode: array and tuple
  * items carry their index ("refs.0", "users.1.email") so per-path resolve
- * hooks can address individual items — previously items silently inherited
- * the array's own path. The semantic tier must keep treating numeric
+ * hooks can address individual items, and the semantic tier treats numeric
  * segments as transparent (items inherit the enclosing key's semantic).
  */
 import { assert, assertEquals } from "@std/assert";

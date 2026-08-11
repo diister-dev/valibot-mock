@@ -1,14 +1,13 @@
 /**
- * Locks seed-determinism of the regex generation path. RandExp used its own
- * `Math.random()` internally, so EVERY regex-backed value (i.e. every mocked
- * identifier) differed between two generators built with the same seed. The
- * fix routes RandExp's `randInt` through the generator's faker instance.
+ * Locks seed-determinism of the regex generation path: every regex-backed
+ * value (every mocked identifier) must reproduce identically for the same
+ * seed. RandExp draws from `Math.random()` internally, which can silently
+ * break that guarantee.
  */
 import { assertEquals, assertNotEquals } from "@std/assert";
 import * as v from "valibot";
 import { createMockGenerator } from "../mod.ts";
 
-// The exact schema that proved the bug (`user:l` vs `user:M` with seed 42).
 const refIdSchema = v.pipe(v.string(), v.regex(/^user:[a-zA-Z0-9]+/));
 
 Deno.test("regex determinism — same seed, same outputs (v.regex)", () => {

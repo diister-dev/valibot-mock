@@ -42,7 +42,7 @@ Deno.test("resolve — SKIP everywhere is byte-identical to no hook (same seed)"
 
 Deno.test("resolve — reaches regex-carrying nodes and exposes the RegExp in schema.pipe", () => {
   // The gap this hook closes: semantics never fire on a regex-carrying
-  // schema, and fake() requires owning the schema. The caller can now detect
+  // schema, and fake() requires owning the schema. The caller can detect
   // the constraint itself and inject a correlated id.
   let seenRegex: RegExp | null = null;
   const gen = createMockGenerator(v.object({ ref: refId }), {

@@ -10,10 +10,9 @@ import { regexToStringMinMax } from "./regex-parser.ts";
 
 const VOID = Symbol("void");
 
-// RandExp draws from Math.random() internally, which defeats `faker: { seed }`
-// for EVERY regex-backed value (so every mocked identifier). Its instance
-// `randInt` overrides the prototype's, so route all draws through the
-// generator's faker instead.
+// RandExp draws from Math.random() internally, silently defeating
+// `faker: { seed }` for every regex-backed value. Its instance `randInt`
+// overrides the prototype's, so route draws through the generator's faker.
 function createSeededRandExp(pattern: RegExp | string, faker: Faker): RandExp {
   const randexp = new RandExp(pattern);
   (randexp as unknown as { randInt: (a: number, b: number) => number }).randInt =
@@ -167,8 +166,7 @@ const schemaHandlers = {
     // generator (never emit a truncated/invalid value).
     if (options.semantics) {
       // Numeric segments are array/tuple indices, not keys: for "email.0" the
-      // meaningful key is still "email" (items inherit the enclosing key's
-      // semantic, as they did before paths carried indices).
+      // meaningful key is still "email", so items inherit the enclosing key's semantic.
       const key = typeof context?.path === 'string'
         ? context.path.split('.').filter((segment: string) => !/^\d+$/.test(segment)).pop()
         : undefined;
@@ -369,12 +367,9 @@ function handleSchema(schema: any, faker: Faker, context: any, options: any): an
     schema = { ...schema, pipe: allPipeItems };
   }
   
-  // Caller-side resolution hook — outranks fake() metadata and semantics
-  // because it belongs to the CALLER, who has generation-time knowledge the
-  // schema author cannot have (correlated ids across collections); SKIP falls
-  // through so the schema-owned channels keep working. Consulted here, after
-  // pipe unwrapping, so `node.schema.pipe` exposes resolved constraints
-  // (RegExp requirements included).
+  // Caller-side hook, ranked above fake()/semantics: the CALLER has
+  // generation-time knowledge the schema author cannot (e.g. correlated ids).
+  // Runs after pipe unwrapping so `schema.pipe` exposes RegExp requirements; SKIP falls through.
   if (options.resolve) {
     const resolved = options.resolve({ schema, path: context?.path ?? "", faker });
     if (resolved !== SKIP) {
