@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -45,23 +45,21 @@ jobs:
     name: Tests (${{ matrix.runtime }})
     runs-on: ubuntu-latest
 
-    # The suite is written against `node:test`, which all three runtimes
-    # implement, so the SAME tests run everywhere. That is the point: a
-    # single-runner suite only exercises one engine, and running Node is what
-    # caught the parameter properties its type stripping cannot erase.
+    # The suite targets `node:test`, so the same tests run on all three.
+    # Worth the matrix: Bun is JavaScriptCore, Node and Deno are V8.
     strategy:
       fail-fast: false
       matrix:
         runtime: [bun, node, deno]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.18
 
@@ -89,24 +87,22 @@ jobs:
     runs-on: ubuntu-latest
     needs: static
 
-    # The package is published for Node and Bun, not just built by them. These
-    # jobs install the real tarball into an empty project, which is the only
-    # thing that exercises the `exports` map and the generated `.d.ts` the way a
-    # user does — including that `valibot` resolves to the CONSUMER's copy,
-    # which is the whole point of it being a peer dependency.
+    # Installs the real tarball into an empty project — the only thing that
+    # exercises the `exports` map, the `.d.ts`, and valibot resolving to the
+    # consumer's own copy the way a user does.
     strategy:
       fail-fast: false
       matrix:
         runtime: [bun, node]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.18
 

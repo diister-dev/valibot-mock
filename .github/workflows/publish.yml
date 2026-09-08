@@ -1,8 +1,7 @@
 name: Publish
 
-# Deliberately NOT `on: push` to main. The previous workflow published on every
-# push to the default branch, so a merged README fix was a release. Publishing
-# is now an explicit act: push a `v*` tag, or run the workflow by hand.
+# Tag or manual only — this used to publish on every push to main, so a merged
+# README fix was a release.
 on:
   push:
     tags:
@@ -28,25 +27,19 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22.18
+          # 24 ships npm 11.19, past trusted publishing's 11.5.1 floor.
+          # (CI pins 22.18 instead, to test at the engines floor.)
+          node-version: 24
           registry-url: https://registry.npmjs.org
-          # Recommended for release builds; a cached package manager has bitten
-          # trusted publishing before.
           package-manager-cache: false
-
-      # Node 22 bundles npm 10, and trusted publishing needs >= 11.5.1. Without
-      # it OIDC fails as a misleading 404 rather than an auth error, so the
-      # upgrade goes in now even though the first release still uses a token.
-      - name: Use an npm that can do trusted publishing
-        run: npm install -g npm@^12
 
       - run: bun install --frozen-lockfile
 
@@ -69,11 +62,8 @@ jobs:
 
       - name: Publish to npm
         if: inputs.registry != 'jsr'
-        # `npm publish` tags "latest" whatever the version says, so a
-        # prerelease would become what `npm install` hands every new user.
-        # Derive the dist-tag from the version's own prerelease identifier.
-        # `--access public` because the package is scoped and scoped packages
-        # default to restricted, which a free account cannot publish.
+        # npm tags "latest" whatever the version says, so the dist-tag comes
+        # from the version's own prerelease identifier instead.
         run: |
           version="$(node -p "require('./package.json').version")"
           case "$version" in
@@ -83,19 +73,9 @@ jobs:
           echo "publishing $version under dist-tag '$tag'"
           npm publish --provenance --access public --tag "$tag"
         env:
-          # TOKEN IS FOR THE FIRST RELEASE ONLY.
-          #
-          # npm's trusted publishing (OIDC) cannot create a package that does
-          # not exist yet — the publisher is configured in the package's own
-          # settings, so there is nothing to configure until it has been
-          # published once (npm/cli#8544). PyPI allows this; npm does not.
-          #
-          # Once this package exists on npmjs.com:
-          #   1. Settings -> Trusted publisher -> GitHub Actions, with this
-          #      repository and the workflow filename `publish.yml`.
-          #   2. Delete this `env:` block and the `--provenance` flag, which
-          #      becomes automatic.
-          #   3. `gh secret delete NPM_TOKEN`.
+          # First release only: OIDC cannot create a package that does not
+          # exist yet (npm/cli#8544). Once it does, set the trusted publisher
+          # on npmjs.com, then drop this block, `--provenance`, and the secret.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to JSR
