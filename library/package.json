@@ -1,0 +1,66 @@
+{
+  "name": "@diister/valibot-mock",
+  "version": "0.1.8",
+  "description": "Generate mock data from Valibot schemas",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "keywords": [
+    "valibot",
+    "mock",
+    "faker",
+    "test-data",
+    "schema",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diister-dev/valibot-mock.git",
+    "directory": "library"
+  },
+  "homepage": "https://github.com/diister-dev/valibot-mock#readme",
+  "bugs": "https://github.com/diister-dev/valibot-mock/issues",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || ^23.5.0 || >=24.0.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "mod.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/mod.d.ts",
+      "default": "./dist/mod.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "valibot": "^1.1.0"
+  },
+  "dependencies": {
+    "@eslint-community/regexpp": "^4.12.2",
+    "@faker-js/faker": "^10.0.0",
+    "randexp": "^0.5.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
+    "@types/bun": "^1.4.1",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.3",
+    "valibot": "^1.4.0"
+  },
+  "scripts": {
+    "check:package": "bun run scripts/check-package.ts",
+    "version:set": "bun run scripts/check-package.ts --write",
+    "prebuild": "bun run check:package",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome lint .",
+    "fmt": "biome format --write .",
+    "fmt:check": "biome format .",
+    "test": "bun test"
+  }
+}

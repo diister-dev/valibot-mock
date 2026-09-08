@@ -5,11 +5,12 @@
  * of values and took its consumer out of memory. The string handler already
  * capped by the option; arrays did not.
  */
-import { assert, assertEquals } from "@std/assert";
+import { test } from "node:test";
+import { assert, assertEquals } from "./+assert.ts";
 import * as v from "valibot";
 import { createMockGenerator } from "../mod.ts";
 
-Deno.test("array: a huge declared maxLength is capped by defaultArrayMaxLength", () => {
+test("array: a huge declared maxLength is capped by defaultArrayMaxLength", () => {
   const schema = v.object({
     runs: v.pipe(v.array(v.number()), v.maxLength(150_000)),
   });
@@ -23,7 +24,7 @@ Deno.test("array: a huge declared maxLength is capped by defaultArrayMaxLength",
   }
 });
 
-Deno.test("array: nested huge bounds stay bounded at every level", () => {
+test("array: nested huge bounds stay bounded at every level", () => {
   const schema = v.object({
     grids: v.pipe(
       v.array(v.pipe(v.array(v.number()), v.maxLength(150_000))),
@@ -38,22 +39,23 @@ Deno.test("array: nested huge bounds stay bounded at every level", () => {
   }
 });
 
-Deno.test("array: an explicit defaultArrayMaxLength raises the cap", () => {
+test("array: an explicit defaultArrayMaxLength raises the cap", () => {
   const schema = v.object({
     runs: v.pipe(v.array(v.number()), v.maxLength(150_000)),
   });
 
   let seen = 0;
   for (let i = 0; i < 40; i++) {
-    const doc = createMockGenerator(schema, { defaultArrayMaxLength: 25 })
-      .generate();
+    const doc = createMockGenerator(schema, {
+      defaultArrayMaxLength: 25,
+    }).generate();
     assert(doc.runs.length <= 25, `expected ≤ 25, got ${doc.runs.length}`);
     seen = Math.max(seen, doc.runs.length);
   }
   assert(seen > 10, `the raised cap must be reachable, max seen: ${seen}`);
 });
 
-Deno.test("array: minLength wins over the cap so the value stays schema-valid", () => {
+test("array: minLength wins over the cap so the value stays schema-valid", () => {
   const schema = v.object({
     runs: v.pipe(v.array(v.number()), v.minLength(30), v.maxLength(150_000)),
   });
@@ -63,7 +65,7 @@ Deno.test("array: minLength wins over the cap so the value stays schema-valid", 
   assertEquals(v.safeParse(schema, doc).success, true);
 });
 
-Deno.test("array: a small declared maxLength is still honoured", () => {
+test("array: a small declared maxLength is still honoured", () => {
   const schema = v.object({
     runs: v.pipe(v.array(v.number()), v.maxLength(3)),
   });

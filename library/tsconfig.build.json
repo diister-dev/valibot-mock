@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["esnext", "dom"],
+    "types": [],
+
+    "outDir": "dist",
+    "rootDir": ".",
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    "allowImportingTsExtensions": false,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["mod.ts", "src"],
+  "exclude": ["test", "scripts", "example.ts", "**/*_test.ts"]
+}

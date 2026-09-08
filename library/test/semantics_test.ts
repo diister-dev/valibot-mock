@@ -3,7 +3,8 @@
  * KEY carries meaning, locale-aware and seed-deterministic. Precedence locks:
  * explicit fake() metadata and validator pipes always beat the key semantic.
  */
-import { assert, assertEquals, assertNotEquals } from "@std/assert";
+import { test } from "node:test";
+import { assert, assertEquals, assertNotEquals } from "./+assert.ts";
 import * as v from "valibot";
 import { createMockGenerator, fake, locales } from "../mod.ts";
 import { normalizeSemanticKey, resolveSemantic } from "../src/semantics.ts";
@@ -16,12 +17,20 @@ const personSchema = v.object({
   note: v.string(),
 });
 
-Deno.test("semantics — known keys yield realistic values, unknown keys keep the random fallback", () => {
-  const gen = createMockGenerator(personSchema, { faker: { locale: [locales.en], seed: 7 } });
+test("semantics — known keys yield realistic values, unknown keys keep the random fallback", () => {
+  const gen = createMockGenerator(personSchema, {
+    faker: { locale: [locales.en], seed: 7 },
+  });
   const doc = gen.generate();
   // Names: letters (with possible spaces/'/-), never bare alphanumeric noise.
-  assert(/^[A-Za-zÀ-ÿ' -]+$/.test(doc.firstname), `firstname looks random: ${doc.firstname}`);
-  assert(/^[A-Za-zÀ-ÿ' -]+$/.test(doc.lastname), `lastname looks random: ${doc.lastname}`);
+  assert(
+    /^[A-Za-zÀ-ÿ' -]+$/.test(doc.firstname),
+    `firstname looks random: ${doc.firstname}`,
+  );
+  assert(
+    /^[A-Za-zÀ-ÿ' -]+$/.test(doc.lastname),
+    `lastname looks random: ${doc.lastname}`,
+  );
   // Email by KEY (no v.email() pipe on this field).
   assert(doc.email.includes("@"), `email not realistic: ${doc.email}`);
   assert(/^[A-Za-zÀ-ÿ' -]+$/.test(doc.city), `city looks random: ${doc.city}`);
@@ -29,15 +38,21 @@ Deno.test("semantics — known keys yield realistic values, unknown keys keep th
   assertEquals(typeof doc.note, "string");
 });
 
-Deno.test("semantics — seed makes the realistic tier deterministic", () => {
-  const a = createMockGenerator(personSchema, { faker: { locale: [locales.fr], seed: 42 } }).generate();
-  const b = createMockGenerator(personSchema, { faker: { locale: [locales.fr], seed: 42 } }).generate();
+test("semantics — seed makes the realistic tier deterministic", () => {
+  const a = createMockGenerator(personSchema, {
+    faker: { locale: [locales.fr], seed: 42 },
+  }).generate();
+  const b = createMockGenerator(personSchema, {
+    faker: { locale: [locales.fr], seed: 42 },
+  }).generate();
   assertEquals(a, b);
-  const c = createMockGenerator(personSchema, { faker: { locale: [locales.fr], seed: 43 } }).generate();
+  const c = createMockGenerator(personSchema, {
+    faker: { locale: [locales.fr], seed: 43 },
+  }).generate();
   assertNotEquals(a, c);
 });
 
-Deno.test("semantics — key normalization: first_name / First-Name / firstName all match", () => {
+test("semantics — key normalization: first_name / First-Name / firstName all match", () => {
   assertEquals(normalizeSemanticKey("first_name"), "firstname");
   assertEquals(normalizeSemanticKey("First-Name"), "firstname");
   assertEquals(normalizeSemanticKey("firstName"), "firstname");
@@ -50,7 +65,7 @@ Deno.test("semantics — key normalization: first_name / First-Name / firstName 
   assert(/^[A-Za-zÀ-ÿ' -]+$/.test(doc.lastName));
 });
 
-Deno.test("semantics — length constraints stay sovereign (truncate long, skip too-short)", () => {
+test("semantics — length constraints stay sovereign (truncate long, skip too-short)", () => {
   // maxLength 5: the realistic value is truncated, never invalid.
   const short = createMockGenerator(
     v.object({ firstname: v.pipe(v.string(), v.maxLength(5)) }),
@@ -67,7 +82,7 @@ Deno.test("semantics — length constraints stay sovereign (truncate long, skip 
   assert(long.firstname.length >= 25);
 });
 
-Deno.test("semantics — validator pipes win over the key (a firstname with v.email() is an email)", () => {
+test("semantics — validator pipes win over the key (a firstname with v.email() is an email)", () => {
   const gen = createMockGenerator(
     v.object({ firstname: v.pipe(v.string(), v.email()) }),
     { faker: { locale: [locales.en], seed: 7 } },
@@ -75,25 +90,30 @@ Deno.test("semantics — validator pipes win over the key (a firstname with v.em
   assert(gen.generate().firstname.includes("@"));
 });
 
-Deno.test("semantics — explicit fake() metadata wins over the key", () => {
+test("semantics — explicit fake() metadata wins over the key", () => {
   const gen = createMockGenerator(
-    v.object({ firstname: v.pipe(v.string(), fake(() => "FORCED")) }),
+    v.object({
+      firstname: v.pipe(
+        v.string(),
+        fake(() => "FORCED"),
+      ),
+    }),
     { faker: { locale: [locales.en], seed: 7 } },
   );
   assertEquals(gen.generate().firstname, "FORCED");
 });
 
-Deno.test("semantics — custom table extends/overrides defaults; false disables the tier", () => {
+test("semantics — custom table extends/overrides defaults; false disables the tier", () => {
   // Consumer maps the ambiguous `displayname` to company names.
-  const custom = createMockGenerator(
-    v.object({ displayName: v.string() }),
-    {
-      faker: { locale: [locales.en], seed: 7 },
-      semantics: { displayname: (f) => f.company.name() },
-    },
-  ).generate();
+  const custom = createMockGenerator(v.object({ displayName: v.string() }), {
+    faker: { locale: [locales.en], seed: 7 },
+    semantics: { displayname: (f) => f.company.name() },
+  }).generate();
   assert(custom.displayName.length > 2);
-  assert(resolveSemantic("displayName") === null, "displayname must NOT be a default (ambiguous)");
+  assert(
+    resolveSemantic("displayName") === null,
+    "displayname must NOT be a default (ambiguous)",
+  );
 
   // Disabled: firstname falls back to random alphanumerics (letters+digits mix
   // over a few samples — at minimum it must not throw and stays a string).

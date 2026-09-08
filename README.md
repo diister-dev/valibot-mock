@@ -35,13 +35,26 @@ This package allows you to automatically generate valid test data from [Valibot]
 
 ## 🚀 Installation
 
-```bash
-# With Deno
-deno add @diister/valibot-mock
+`valibot` is a **peer dependency**: the generator reads and validates the very
+schema objects you hand it, so it has to use your copy of valibot rather than
+bundle a second one.
 
-# With npm/pnpm/yarn
-npx jsr add @diister/valibot-mock
+```bash
+# Bun / npm / pnpm / yarn
+bun add @diister/valibot-mock valibot
+
+# Deno
+deno add jsr:@diister/valibot-mock npm:valibot
 ```
+
+```ts
+import { createMockGenerator } from "@diister/valibot-mock";
+import * as v from "valibot";
+```
+
+Published to npm as `@diister/valibot-mock` and to JSR under the same name; the
+two carry the same code. Runs on Bun, Deno and Node.js — the Node floor is
+`^20.19 || ^22.13 || ^23.5 || >=24`, inherited from `@faker-js/faker`.
 
 ## 💡 Usage
 
