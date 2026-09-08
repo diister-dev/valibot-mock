@@ -1,8 +1,23 @@
 name: Publish
+
+# Deliberately NOT `on: push` to main. The previous workflow published on every
+# push to the default branch, so a merged README fix was a release. Publishing
+# is now an explicit act: push a `v*` tag, or run the workflow by hand.
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: Which registry to publish to
+        type: choice
+        options: [both, npm, jsr]
+        default: both
+
+defaults:
+  run:
+    working-directory: library
 
 jobs:
   publish:
@@ -14,6 +29,75 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Publish package
-        working-directory: library
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18
+          registry-url: https://registry.npmjs.org
+          # Recommended for release builds; a cached package manager has bitten
+          # trusted publishing before.
+          package-manager-cache: false
+
+      # Node 22 bundles npm 10, and trusted publishing needs >= 11.5.1. Without
+      # it OIDC fails as a misleading 404 rather than an auth error, so the
+      # upgrade goes in now even though the first release still uses a token.
+      - name: Use an npm that can do trusted publishing
+        run: npm install -g npm@^12
+
+      - run: bun install --frozen-lockfile
+
+      - name: Verify before publishing
+        run: |
+          bun run check
+          bun run lint
+          bun test
+          bun run build
+
+      - name: Refuse to publish a version that is not the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$manifest" ]; then
+            echo "tag $tag does not match package.json version $manifest" >&2
+            exit 1
+          fi
+
+      - name: Publish to npm
+        if: inputs.registry != 'jsr'
+        # `npm publish` tags "latest" whatever the version says, so a
+        # prerelease would become what `npm install` hands every new user.
+        # Derive the dist-tag from the version's own prerelease identifier.
+        # `--access public` because the package is scoped and scoped packages
+        # default to restricted, which a free account cannot publish.
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            *-*) tag="$(printf '%s' "${version#*-}" | cut -d. -f1)" ;;
+            *)   tag="latest" ;;
+          esac
+          echo "publishing $version under dist-tag '$tag'"
+          npm publish --provenance --access public --tag "$tag"
+        env:
+          # TOKEN IS FOR THE FIRST RELEASE ONLY.
+          #
+          # npm's trusted publishing (OIDC) cannot create a package that does
+          # not exist yet — the publisher is configured in the package's own
+          # settings, so there is nothing to configure until it has been
+          # published once (npm/cli#8544). PyPI allows this; npm does not.
+          #
+          # Once this package exists on npmjs.com:
+          #   1. Settings -> Trusted publisher -> GitHub Actions, with this
+          #      repository and the workflow filename `publish.yml`.
+          #   2. Delete this `env:` block and the `--provenance` flag, which
+          #      becomes automatic.
+          #   3. `gh secret delete NPM_TOKEN`.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to JSR
+        if: inputs.registry != 'npm'
         run: npx jsr publish

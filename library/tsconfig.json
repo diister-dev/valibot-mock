@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    // `dom` is here for the web globals the code actually uses (console,
+    // Blob, File), which every target runtime provides. It also keeps Deno
+    // in step: `deno publish` reads this file, and without it the JSR
+    // type-check fails on those same globals.
+    "lib": ["esnext", "dom"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": ["bun", "node"],
+
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["mod.ts", "src", "test", "scripts", "example.ts"]
+}

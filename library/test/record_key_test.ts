@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "@std/assert";
+import { test } from "node:test";
+import { assert, assertEquals } from "./+assert.ts";
 import * as v from "valibot";
 import { createMockGenerator } from "../src/generator.ts";
 
@@ -11,7 +12,7 @@ import { createMockGenerator } from "../src/generator.ts";
  * "Failed to generate valid value for schema type: record".
  */
 
-Deno.test("record with picklist key emits only picklist values as keys", () => {
+test("record with picklist key emits only picklist values as keys", () => {
   const schema = v.record(
     v.picklist(["fr", "en"]),
     v.object({ subject: v.string() }),
@@ -31,12 +32,9 @@ Deno.test("record with picklist key emits only picklist values as keys", () => {
   }
 });
 
-Deno.test("record with regex'd string key emits keys matching the pattern", () => {
+test("record with regex'd string key emits keys matching the pattern", () => {
   const KEY_REGEX = /^key_[a-z]{3}$/;
-  const schema = v.record(
-    v.pipe(v.string(), v.regex(KEY_REGEX)),
-    v.number(),
-  );
+  const schema = v.record(v.pipe(v.string(), v.regex(KEY_REGEX)), v.number());
   const generator = createMockGenerator(schema);
 
   for (let i = 0; i < 20; i++) {
@@ -49,7 +47,7 @@ Deno.test("record with regex'd string key emits keys matching the pattern", () =
   }
 });
 
-Deno.test("record with plain string key still produces a valid record", () => {
+test("record with plain string key still produces a valid record", () => {
   const schema = v.record(v.string(), v.number());
   const generator = createMockGenerator(schema);
 

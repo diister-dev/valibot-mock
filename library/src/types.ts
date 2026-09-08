@@ -45,20 +45,20 @@ export interface MockGeneratorOptions {
     locale?: LocaleDefinition | LocaleDefinition[];
     randomizer?: Randomizer;
     seed?: number;
-};
-  
+  };
+
   /**
    * Maximum number of attempts to generate a valid value
    * @default 10
    */
   maxAttempts?: number;
-  
+
   /**
    * Default maximum length for arrays
    * @default 10
    */
   defaultArrayMaxLength?: number;
-  
+
   /**
    * Default maximum length for randomly generated strings
    * @default 1048575 (2^20 - 1)
@@ -129,7 +129,9 @@ export interface MockGenerator<TSchema extends v.GenericSchema> {
    */
   generateMany(
     count: number,
-    overrides?: Partial<v.InferOutput<TSchema>> | ((index: number) => Partial<v.InferOutput<TSchema>>),
+    overrides?:
+      | Partial<v.InferOutput<TSchema>>
+      | ((index: number) => Partial<v.InferOutput<TSchema>>),
   ): v.InferOutput<TSchema>[];
 }
 
@@ -151,7 +153,10 @@ export const FAKE_GENERATOR = Symbol("fake_generator");
 /**
  * Type for custom fake generator function
  */
-export type FakeGeneratorFn<T> = (faker: Faker, context: GenerationContext) => T;
+export type FakeGeneratorFn<T> = (
+  faker: Faker,
+  context: GenerationContext,
+) => T;
 
 /**
  * Metadata interface for fake generators

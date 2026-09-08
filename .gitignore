@@ -134,3 +134,8 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Staged into library/ by `bun run sync:package` so npm and JSR ship them; the
+# originals live at the repository root.
+library/README.md
+library/LICENSE

@@ -8,7 +8,8 @@
  * and threw "Max attempts reached" — silently breaking mock population in
  * consumers (mongodbee migration simulation).
  */
-import { assert } from "@std/assert";
+import { test } from "node:test";
+import { assert } from "./+assert.ts";
 import * as v from "valibot";
 import { createMockGenerator } from "../mod.ts";
 
@@ -28,23 +29,23 @@ function assertGeneratesValid(
   }
 }
 
-Deno.test("hexColor generates valid values (regex-backed action, not v.regex)", () => {
+test("hexColor generates valid values (regex-backed action, not v.regex)", () => {
   assertGeneratesValid("hexColor", v.pipe(v.string(), v.hexColor()));
 });
 
-Deno.test("isoDate generates valid values", () => {
+test("isoDate generates valid values", () => {
   assertGeneratesValid("isoDate", v.pipe(v.string(), v.isoDate()));
 });
 
-Deno.test("ulid generates valid values", () => {
+test("ulid generates valid values", () => {
   assertGeneratesValid("ulid", v.pipe(v.string(), v.ulid()));
 });
 
-Deno.test("slug generates valid values", () => {
+test("slug generates valid values", () => {
   assertGeneratesValid("slug", v.pipe(v.string(), v.slug()));
 });
 
-Deno.test("regex-backed action inside an object field generates without throwing", () => {
+test("regex-backed action inside an object field generates without throwing", () => {
   const schema = v.object({
     name: v.string(),
     color: v.pipe(v.string(), v.hexColor()),
