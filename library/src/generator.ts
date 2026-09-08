@@ -1,5 +1,6 @@
 import * as v from "valibot";
-import { Faker, en } from "@faker-js/faker";
+import { Faker, base, en } from "@faker-js/faker";
+import type { LocaleDefinition } from "@faker-js/faker";
 import RandExp from "randexp";
 
 import type {
@@ -267,6 +268,32 @@ const schemaHandlers = {
     return handleSchema(schema.wrapped, faker, context, options);
   },
 
+  // The `non_*` wrappers only narrow what their inner schema already allows,
+  // so drawing from the inner schema and rejecting its empty case is enough.
+  // Without these the README's claim of support was hollow: they fell through
+  // to the unhandled-type fallback, which returns a random word — valid by
+  // coincidence for a string, wrong for anything else.
+  non_nullable: (schema: any, faker: Faker, context: any, options: any) =>
+    generateNonEmpty(schema, faker, context, options, (v) => v !== null),
+
+  non_nullish: (schema: any, faker: Faker, context: any, options: any) =>
+    generateNonEmpty(
+      schema,
+      faker,
+      context,
+      options,
+      (v) => v !== null && v !== undefined && v !== VOID,
+    ),
+
+  non_optional: (schema: any, faker: Faker, context: any, options: any) =>
+    generateNonEmpty(
+      schema,
+      faker,
+      context,
+      options,
+      (v) => v !== undefined && v !== VOID,
+    ),
+
   nullish: (schema: any, faker: Faker, context: any, options: any) => {
     const choice = faker.number.int({ min: 0, max: 2 });
     if (choice === 0) return null;
@@ -384,6 +411,30 @@ const schemaHandlers = {
   schemaHandlers["object"];
 (schemaHandlers as Record<string, unknown>)["strict_object"] =
   schemaHandlers["object"];
+
+/**
+ * Draws from a wrapper's inner schema until the result is not its empty case,
+ * which is exactly what the `non_*` schemas exist to exclude.
+ *
+ * Retries rather than unwrapping twice: the inner schema may be a union or a
+ * `nullable` whose empty branch is chosen at random, so drawing again is the
+ * only reliable way to honour the constraint.
+ */
+function generateNonEmpty(
+  schema: any,
+  faker: Faker,
+  context: any,
+  options: any,
+  accept: (value: unknown) => boolean,
+): unknown {
+  for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
+    const value = handleSchema(schema.wrapped, faker, context, options);
+    if (accept(value)) return value;
+  }
+  throw new Error(
+    `Could not generate a non-empty value for ${schema.type} in ${options.maxAttempts} attempts`,
+  );
+}
 
 function handleSchema(
   schema: any,
@@ -514,6 +565,22 @@ function handleSchema(
 }
 
 /**
+ * Appends Faker's `base` locale, which the language locales do not carry.
+ *
+ * `system.fileName()` reads `system.mime_type`, and that lives in `base` alone
+ * — so a Faker built from `[en]` threw on every `v.file()` and `v.blob()`
+ * generation. Faker resolves a locale array in order and falls through to the
+ * last entry, which is exactly what `base` is meant for.
+ */
+function withBaseLocale(
+  locale: LocaleDefinition | LocaleDefinition[] | undefined,
+): LocaleDefinition[] {
+  const chain =
+    locale === undefined ? [en] : Array.isArray(locale) ? locale : [locale];
+  return chain.includes(base) ? chain : [...chain, base];
+}
+
+/**
  * Creates a mock generator from a Valibot schema
  *
  * @param schema - The Valibot schema to use for generation
@@ -527,7 +594,10 @@ export function createMockGenerator<TSchema extends v.GenericSchema>(
   const resolvedOptions: ResolvedMockGeneratorOptions = {
     // Merge over the locale default: a partial `{ seed }` must not drop the
     // locale (Faker's constructor requires one).
-    faker: new Faker({ locale: [en], ...(options.faker ?? {}) }),
+    faker: new Faker({
+      ...(options.faker ?? {}),
+      locale: withBaseLocale(options.faker?.locale),
+    }),
     maxAttempts: options.maxAttempts ?? 100,
     defaultArrayMaxLength: options.defaultArrayMaxLength ?? 10,
     defaultStringMaxLength: options.defaultStringMaxLength ?? 20,

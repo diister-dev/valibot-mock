@@ -185,12 +185,20 @@ Creates a mock generator for a given schema.
 ```ts
 interface MockGeneratorOptions {
   faker?: {
-    locale?: LocaleDefinition[];     // Faker locales (use exported locales)
+    locale?: LocaleDefinition | LocaleDefinition[];  // use the exported locales
     seed?: number;                   // Seed for reproducible results
+    randomizer?: Randomizer;
   };
-  maxAttempts?: number;             // Max attempts (default: 10)
+  maxAttempts?: number;             // Max attempts (default: 100)
   defaultArrayMaxLength?: number;   // Max array size (default: 10)
-  defaultStringMaxLength?: number;  // Max string size (default: 1048575)
+  defaultStringMaxLength?: number;  // Max string size (default: 20)
+
+  // Realistic values for recognised field names — see "Semantic field names".
+  // `false` disables the tier; a record extends or overrides the built-in table.
+  semantics?: Record<string, SemanticGenerator> | false;
+
+  // Caller-side hook consulted at every node — see "The resolve hook".
+  resolve?: (node: ResolveNode) => unknown;
 }
 ```
 
@@ -199,6 +207,49 @@ interface MockGeneratorOptions {
 A `MockGenerator` object with methods:
 - `generate()`: Generate a single value
 - `generateMany(count)`: Generate multiple values
+
+Generation consults three tiers, in this order: `resolve`, then `fake()`
+attached to the schema, then `semantics`.
+
+### The `resolve` hook
+
+`resolve` is called for every node at any depth, and outranks both `fake()` and
+semantics. Return `SKIP` to decline a node and let normal generation continue;
+anything else is taken as the value, validated like a generated one, and its
+subtree is not visited.
+
+```ts
+import { createMockGenerator, SKIP } from "@diister/valibot-mock";
+
+const gen = createMockGenerator(OrderSchema, {
+  resolve: (node) => (node.path === "customer.id" ? "cus_fixed" : SKIP),
+});
+```
+
+`node.path` is dot-separated from the root (`""` at the root) and includes array
+indices, e.g. `"items.0.sku"`.
+
+### Semantic field names
+
+Plain strings are generated from their field name when it is recognised, so a
+`firstname` entry yields a name rather than random characters. Keys are
+normalised — `first_name`, `First-Name` and `firstName` all match `firstname`.
+
+```ts
+import {
+  createMockGenerator,
+  DEFAULT_SEMANTICS,
+  normalizeSemanticKey,
+} from "@diister/valibot-mock";
+
+normalizeSemanticKey("First-Name"); // "firstname"
+Object.keys(DEFAULT_SEMANTICS);     // the built-in table
+
+// Extend or override it; pass `false` to switch the tier off entirely.
+createMockGenerator(schema, {
+  semantics: { sku: (faker) => faker.string.alphanumeric(8).toUpperCase() },
+});
+```
 
 ### `fake(generatorFn)`
 
