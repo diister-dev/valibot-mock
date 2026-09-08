@@ -33,6 +33,8 @@ jobs:
         with:
           bun-version: 1.4.2
 
+      # No NODE_AUTH_TOKEN: authentication is OIDC via the trusted publisher
+      # configured on npmjs.com, which also makes provenance automatic.
       - uses: actions/setup-node@v7
         with:
           # 24 ships npm 11.19, past trusted publishing's 11.5.1 floor.
@@ -60,7 +62,10 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to npm
+      # Staged, not direct: the version lands in a pending state and only goes
+      # live once a maintainer runs `npm stage approve <id>` and clears a 2FA
+      # challenge. A compromised workflow therefore cannot ship anything.
+      - name: Stage the npm release
         if: inputs.registry != 'jsr'
         # npm tags "latest" whatever the version says, so the dist-tag comes
         # from the version's own prerelease identifier instead.
@@ -70,13 +75,9 @@ jobs:
             *-*) tag="$(printf '%s' "${version#*-}" | cut -d. -f1)" ;;
             *)   tag="latest" ;;
           esac
-          echo "publishing $version under dist-tag '$tag'"
-          npm publish --provenance --access public --tag "$tag"
-        env:
-          # First release only: OIDC cannot create a package that does not
-          # exist yet (npm/cli#8544). Once it does, set the trusted publisher
-          # on npmjs.com, then drop this block, `--provenance`, and the secret.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          echo "staging $version under dist-tag '$tag'"
+          npm stage publish --access public --tag "$tag"
+          echo "Staged. Release it with: npm stage list && npm stage approve <id>"
 
       - name: Publish to JSR
         if: inputs.registry != 'npm'
