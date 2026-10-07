@@ -81,6 +81,7 @@ export type {
   MockGenerator,
 } from "./src/types.ts";
 export { fake } from "./src/fake.ts";
+export { MockGenerationError } from "./src/errors.ts";
 export type { SemanticGenerator } from "./src/semantics.ts";
 export { DEFAULT_SEMANTICS, normalizeSemanticKey } from "./src/semantics.ts";
 

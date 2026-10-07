@@ -189,7 +189,8 @@ interface MockGeneratorOptions {
     seed?: number;                   // Seed for reproducible results
     randomizer?: Randomizer;
   };
-  maxAttempts?: number;             // Max attempts (default: 100)
+  maxAttempts?: number;             // Max attempts per value (default: 100)
+  maxRegexAttempts?: number;        // Max draws for a regex-backed string (default: 50)
   defaultArrayMaxLength?: number;   // Max array size (default: 10)
   defaultStringMaxLength?: number;  // Max string size (default: 20)
 
@@ -210,6 +211,21 @@ A `MockGenerator` object with methods:
 
 Generation consults three tiers, in this order: `resolve`, then `fake()`
 attached to the schema, then `semantics`.
+
+#### Failures
+
+When no valid value can be produced, `generate()` throws a
+`MockGenerationError` (exported) carrying the node's `path`, its
+`schemaType` and, for a regex-backed string, its `pattern`. Nothing is
+printed to the console.
+
+A regex-backed string is drawn from the pattern with its quantifiers bounded
+so that the result fits `maxLength` (nested repetitions such as
+`/^\/(?:[^/]+\/)*$/` included). Each draw is checked against the pattern; when
+`maxRegexAttempts` draws all miss (a lookaround or another construct the
+generator cannot honour), or when the pattern cannot fit `maxLength` at all,
+generation fails at once instead of retrying the whole value. Give such a
+field a `fake()` or answer it from `resolve`.
 
 ### The `resolve` hook
 

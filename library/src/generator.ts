@@ -11,7 +11,8 @@ import type {
 import { SKIP } from "./types.ts";
 import { getFakeGenerator } from "./fake.ts";
 import { DEFAULT_SEMANTICS, resolveSemantic } from "./semantics.ts";
-import { regexToStringMinMax } from "./regex-parser.ts";
+import { estimateMinLength, regexToStringMinMax } from "./regex-parser.ts";
+import { MockGenerationError } from "./errors.ts";
 
 const VOID = Symbol("void");
 
@@ -152,32 +153,14 @@ const schemaHandlers = {
     }
 
     if (regex) {
-      const result = regexToStringMinMax(regex, minLength, maxLength, {
-        preferLazy: false,
-        generateCandidates: true,
-        candidateCount: 5,
-      });
-
-      if (result.candidates && result.candidates.length > 0) {
-        const randomIndex = faker.number.int({
-          min: 0,
-          max: result.candidates.length - 1,
-        });
-        const selectedCandidate = result.candidates[randomIndex];
-
-        if (selectedCandidate) {
-          const randexp = createSeededRandExp(selectedCandidate.regex, faker);
-          randexp.max = selectedCandidate.maxLength ?? maxLength;
-
-          const generated = randexp.gen();
-          return generated;
-        }
-      }
-
-      const randexp = createSeededRandExp(result.transformed, faker);
-      randexp.max = result.actualMaxLength ?? maxLength;
-      const generated = randexp.gen();
-      return generated;
+      return generateRegexString(
+        regex,
+        minLength,
+        explicitMaxLength,
+        faker,
+        context,
+        options,
+      );
     }
 
     // Semantic tier: an unconstrained string whose ENTRY KEY carries meaning
@@ -413,6 +396,102 @@ const schemaHandlers = {
   schemaHandlers["object"];
 
 /**
+ * Draws a string matching `regex` within the length bounds, or throws a
+ * {@link MockGenerationError} naming the field and the pattern.
+ *
+ * Every draw is checked against the pattern and the bounds HERE, so a
+ * pattern the generator cannot reach fails after `maxRegexAttempts` cheap
+ * draws instead of feeding the whole-value retry loop: that loop re-parsed
+ * the pattern and re-drew up to `maxAttempts` times per value, which on an
+ * out-of-reach pattern cost seconds per field.
+ */
+function generateRegexString(
+  regex: RegExp,
+  minLength: number,
+  explicitMaxLength: number | undefined,
+  faker: Faker,
+  context: any,
+  options: ResolvedMockGeneratorOptions,
+): string {
+  const path = typeof context?.path === "string" ? context.path : "";
+  const upperBound = explicitMaxLength ?? Number.POSITIVE_INFINITY;
+  if (minLength > upperBound) {
+    throw new MockGenerationError(
+      `Cannot generate a string at "${path}": minLength ${minLength} exceeds maxLength ${upperBound}`,
+      { path, schemaType: "string", pattern: String(regex) },
+    );
+  }
+
+  // Without an explicit maxLength the default cap only keeps random noise
+  // short: a pattern whose structure needs more (a 26-char ULID) still gets
+  // its minimum.
+  const structuralMin = estimateMinLength(regex);
+  const maxLength =
+    explicitMaxLength ??
+    Math.max(options.defaultStringMaxLength, structuralMin, minLength);
+
+  const result = regexToStringMinMax(regex, minLength, maxLength, {
+    preferLazy: false,
+    generateCandidates: true,
+    candidateCount: 5,
+  });
+  if (result.infeasible) {
+    throw new MockGenerationError(
+      `Cannot generate a string at "${path}" matching ${String(regex)}: ` +
+        `the pattern needs at least ${result.actualMinLength} characters, maxLength is ${maxLength}`,
+      { path, schemaType: "string", pattern: String(regex) },
+    );
+  }
+
+  // Sources to draw from: the fixed-repetition candidates (exact lengths)
+  // and the budget-fitted pattern when it fits the bounds.
+  const sources: Array<{ pattern: string; max: number }> = [];
+  for (const candidate of result.candidates ?? []) {
+    if (candidate.minLength <= maxLength) {
+      sources.push({
+        pattern: candidate.regex,
+        max: candidate.maxLength ?? maxLength,
+      });
+    }
+  }
+  if (result.isExact || sources.length === 0) {
+    sources.push({
+      pattern: result.transformed,
+      max: result.actualMaxLength ?? maxLength,
+    });
+  }
+
+  // `test` on a global or sticky regex is stateful (`lastIndex`).
+  const matcher = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ""));
+  const generators = new Map<string, RandExp>();
+  for (let attempt = 0; attempt < options.maxRegexAttempts; attempt++) {
+    const source =
+      sources[faker.number.int({ min: 0, max: sources.length - 1 })]!;
+    let randexp = generators.get(source.pattern);
+    if (!randexp) {
+      randexp = createSeededRandExp(source.pattern, faker);
+      randexp.max = source.max;
+      generators.set(source.pattern, randexp);
+    }
+    const value = randexp.gen();
+    if (
+      value.length >= minLength &&
+      value.length <= upperBound &&
+      matcher.test(value)
+    ) {
+      return value;
+    }
+  }
+  throw new MockGenerationError(
+    `Cannot generate a string at "${path}" matching ${String(regex)}` +
+      ` (length ${minLength}..${explicitMaxLength ?? "any"}) in ${options.maxRegexAttempts} attempts` +
+      ` ; the pattern is out of the generator's reach (lookarounds, backreferences…);` +
+      ` give the field a fake() or a resolve() hook`,
+    { path, schemaType: "string", pattern: String(regex) },
+  );
+}
+
+/**
  * Draws from a wrapper's inner schema until the result is not its empty case,
  * which is exactly what the `non_*` schemas exist to exclude.
  *
@@ -434,6 +513,18 @@ function generateNonEmpty(
   throw new Error(
     `Could not generate a non-empty value for ${schema.type} in ${options.maxAttempts} attempts`,
   );
+}
+
+/** First issue of a failed parse, path and message, truncated. */
+function summarizeIssues(parsed: {
+  success: boolean;
+  issues?: readonly v.BaseIssue<unknown>[] | undefined;
+}): string {
+  if (parsed.success || !parsed.issues?.length) return "";
+  const issue = parsed.issues[0]!;
+  const where = v.getDotPath(issue);
+  const text = `${where ? `${where}: ` : ""}${issue.message}`;
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 
 function handleSchema(
@@ -522,17 +613,11 @@ function handleSchema(
         }
         maxAttempts--;
       }
-      console.error(
-        `Failed to generate valid value using custom fake generator`,
-        result,
-      );
       throw new Error(`Max attempts reached using custom fake generator`);
-    } catch (error) {
-      console.warn(
-        "Custom fake generator failed, falling back to default handlers:",
-        error,
-      );
-      // Fall through to default handlers
+    } catch {
+      // Fall through to the default handlers, silently: printing the
+      // rejected value (and the whole error) here flooded consumers' output,
+      // and the default handlers either succeed or throw a precise error.
     }
   }
 
@@ -552,12 +637,15 @@ function handleSchema(
       }
       maxAttempts--;
     }
-    console.error(
-      `Failed to generate valid value for schema type:`,
-      schema,
-      result,
+    // No console output: the rejected value can be kilobytes of random
+    // characters. The error names the node and the first reason instead.
+    const path = typeof context?.path === "string" ? context.path : "";
+    const reason = summarizeIssues(v.safeParse(originalSchema, result));
+    throw new MockGenerationError(
+      `Max attempts reached for schema type: ${schema.type} at "${path}"` +
+        ` (${options.maxAttempts} attempts)${reason ? `: ${reason}` : ""}`,
+      { path, schemaType: schema.type },
     );
-    throw new Error(`Max attempts reached for schema type: ${schema.type}`);
   } else {
     console.warn(`No handler for type: ${schema.type}`);
     return faker.lorem.word();
@@ -598,7 +686,8 @@ export function createMockGenerator<TSchema extends v.GenericSchema>(
       ...(options.faker ?? {}),
       locale: withBaseLocale(options.faker?.locale),
     }),
-    maxAttempts: options.maxAttempts ?? 100,
+    maxAttempts: Math.max(1, options.maxAttempts ?? 100),
+    maxRegexAttempts: Math.max(1, options.maxRegexAttempts ?? 50),
     defaultArrayMaxLength: options.defaultArrayMaxLength ?? 10,
     defaultStringMaxLength: options.defaultStringMaxLength ?? 20,
     semantics:

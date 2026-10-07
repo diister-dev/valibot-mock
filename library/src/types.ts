@@ -48,10 +48,21 @@ export interface MockGeneratorOptions {
   };
 
   /**
-   * Maximum number of attempts to generate a valid value
-   * @default 10
+   * Maximum number of attempts to generate a valid value for one schema node
+   * before throwing a `MockGenerationError`.
+   * @default 100
    */
   maxAttempts?: number;
+
+  /**
+   * Maximum number of draws for a regex-backed string (`v.regex()`,
+   * `v.ulid()`, `v.hexColor()`…). Each draw is checked against the pattern
+   * and the length bounds; when none matches, generation fails at once with a
+   * `MockGenerationError` naming the field and the pattern, instead of
+   * retrying the whole value `maxAttempts` times.
+   * @default 50
+   */
+  maxRegexAttempts?: number;
 
   /**
    * Default maximum length for arrays
@@ -90,6 +101,7 @@ export interface MockGeneratorOptions {
 export interface ResolvedMockGeneratorOptions {
   faker: Faker;
   maxAttempts: number;
+  maxRegexAttempts: number;
   defaultArrayMaxLength: number;
   defaultStringMaxLength: number;
   /** null = tier disabled; a record = consumer table merged over defaults at resolve time. */

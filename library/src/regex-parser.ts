@@ -33,6 +33,11 @@ export interface RegexTransformResult {
     | Array<{ regex: string; minLength: number; maxLength: number | null }>
     | undefined;
   warning?: string | undefined;
+  /**
+   * True when the pattern's structural minimum length already exceeds the
+   * requested maximum: no string can satisfy both.
+   */
+  infeasible?: boolean | undefined;
 }
 
 export interface RegexStringOptions {
@@ -230,18 +235,21 @@ class MinMaxTransformer {
   // Spelled out rather than declared as constructor parameter properties:
   // those are the one TypeScript-only construct Node's type stripping cannot
   // erase, so they made this file unloadable as raw `.ts` under Node.
-  private readonly minTarget: number;
   private readonly maxTarget: number;
   private readonly options: { preferLazy?: boolean };
+  private readonly extraRepetitions: number;
 
+  // `_minTarget` is kept for the call sites' shape: a quantifier's minimum is
+  // structural, so the target minimum no longer lowers it (see below).
   constructor(
-    minTarget: number,
+    _minTarget: number,
     maxTarget: number,
     options: { preferLazy?: boolean } = {},
+    extraRepetitions: number = Infinity,
   ) {
-    this.minTarget = minTarget;
     this.maxTarget = maxTarget;
     this.options = options;
+    this.extraRepetitions = extraRepetitions;
   }
 
   transform(pattern: string, flags?: string): string {
@@ -311,8 +319,9 @@ class MinMaxTransformer {
   private escapeChar(value: number): string {
     const char = String.fromCodePoint(value);
 
-    // Escape special characters
-    if ("\\^$.*+?()[]{}|".includes(char)) {
+    // Escape special characters. `/` too: the transformed source is
+    // re-parsed as a `/.../` literal, where a bare slash ends the pattern.
+    if ("\\^$.*+?()[]{}|/".includes(char)) {
       return "\\" + char;
     }
 
@@ -371,19 +380,18 @@ class MinMaxTransformer {
   private transformQuantifier(node: AST.Quantifier): string {
     const element = this.transformElement(node.element);
 
-    // Calculate new limits based on budget
-    let min = node.min;
-    let max = node.max;
-
-    // Limit max if infinite
-    if (max === Infinity) {
-      max = this.maxTarget;
-    } else {
-      max = Math.min(max, this.maxTarget);
-    }
-
-    // Adjust min
-    min = Math.max(0, Math.min(min, this.minTarget));
+    // A quantifier's minimum is STRUCTURAL: `[^/]+` lowered to `[^/]{0,n}`
+    // produced empty segments the original pattern rejects, so the minimum
+    // is always kept. Only the head-room above it is capped: by the length
+    // budget, and by `extraRepetitions`, which `regexToStringMinMax` sizes so
+    // NESTED quantifiers cannot multiply into strings far past the maximum
+    // (`(?:[^/]{0,1024}/){0,1024}` drew half-megabyte strings).
+    const min = node.min;
+    const headroom = Math.min(
+      this.extraRepetitions,
+      Math.max(0, this.maxTarget - min),
+    );
+    const max = Math.min(node.max, min + headroom);
 
     const lazy = this.options.preferLazy || node.greedy === false ? "?" : "";
 
@@ -749,7 +757,7 @@ class ConfigurableTransformer {
 
   private escapeChar(value: number): string {
     const char = String.fromCodePoint(value);
-    if ("\\^$.*+?()[]{}|".includes(char)) return "\\" + char;
+    if ("\\^$.*+?()[]{}|/".includes(char)) return "\\" + char;
     if (value === 0x0a) return "\\n";
     if (value === 0x0d) return "\\r";
     if (value === 0x09) return "\\t";
@@ -882,11 +890,52 @@ export function regexToString(
   return result;
 }
 
+/**
+ * Results of {@link regexToStringMinMax} keyed by pattern and bounds. The
+ * transform is pure, and a mock run asks for the same field's pattern once
+ * per document: parsing it, fitting its budget and building candidates every
+ * time was most of a regex-backed string's cost. Bounded so a generator fed
+ * unbounded distinct patterns cannot grow it forever.
+ */
+const MIN_MAX_CACHE = new Map<string, RegexTransformResult>();
+const MIN_MAX_CACHE_LIMIT = 512;
+
 export function regexToStringMinMax(
   regex: string | RegExp,
   minLength: number,
   maxLength: number,
   options: Partial<Omit<MinMaxOptions, "min" | "max">> = {},
+): RegexTransformResult {
+  const key = JSON.stringify([
+    regex instanceof RegExp ? regex.source : regex,
+    regex instanceof RegExp ? regex.flags : null,
+    minLength,
+    maxLength,
+    options.preferLazy ?? null,
+    options.generateCandidates ?? null,
+    options.candidateCount ?? null,
+  ]);
+  const cached = MIN_MAX_CACHE.get(key);
+  if (cached) return cached;
+  const result = computeRegexToStringMinMax(
+    regex,
+    minLength,
+    maxLength,
+    options,
+  );
+  if (MIN_MAX_CACHE.size >= MIN_MAX_CACHE_LIMIT) {
+    const oldest = MIN_MAX_CACHE.keys().next().value;
+    if (oldest !== undefined) MIN_MAX_CACHE.delete(oldest);
+  }
+  MIN_MAX_CACHE.set(key, result);
+  return result;
+}
+
+function computeRegexToStringMinMax(
+  regex: string | RegExp,
+  minLength: number,
+  maxLength: number,
+  options: Partial<Omit<MinMaxOptions, "min" | "max">>,
 ): RegexTransformResult {
   const parsed = parseRegex(regex);
 
@@ -897,10 +946,13 @@ export function regexToStringMinMax(
   // Check feasibility
   if (currentEstimate.min > maxLength) {
     return {
-      transformed: regex.toString(),
+      // The bare source: RandExp reads a string as a pattern, so the
+      // `/.../flags` form would have generated the slashes literally.
+      transformed: parsed.source,
       actualMinLength: currentEstimate.min,
       actualMaxLength: currentEstimate.max,
       isExact: false,
+      infeasible: true,
       warning: `Cannot meet maxLength=${maxLength}. Structural minimum is ${currentEstimate.min}`,
       candidates: options.generateCandidates
         ? new RegexCandidateGenerator(regex).generate(
@@ -917,28 +969,54 @@ export function regexToStringMinMax(
   if (options.preferLazy !== undefined) {
     transformerOptions.preferLazy = options.preferLazy;
   }
-  const transformer = new MinMaxTransformer(
-    minLength,
-    maxLength,
-    transformerOptions,
-  );
 
-  const source = regex instanceof RegExp ? regex.source : regex;
+  const source = regex instanceof RegExp ? regex.source : parsed.source;
   const flags = regex instanceof RegExp ? regex.flags : undefined;
 
-  const transformedPattern = transformer.transform(source, flags);
+  const transformWith = (extra: number) => {
+    const pattern = new MinMaxTransformer(
+      minLength,
+      maxLength,
+      transformerOptions,
+      extra,
+    ).transform(source, flags);
+    let estimate: RegexLengthEstimate;
+    try {
+      estimate = estimator.estimate(
+        parseRegex(flags ? `/${pattern}/${flags}` : `/${pattern}/`).pattern,
+      );
+    } catch {
+      // If re-parsing fails, use a basic estimation
+      estimate = { min: minLength, max: maxLength };
+    }
+    return { pattern, estimate };
+  };
 
-  // Recalculate limits - avoid re-parsing if it causes errors
-  let finalEstimate: RegexLengthEstimate;
-  try {
-    const transformedRegex = flags
-      ? `/${transformedPattern}/${flags}`
-      : `/${transformedPattern}/`;
-    finalEstimate = estimator.estimate(parseRegex(transformedRegex).pattern);
-  } catch {
-    // If re-parsing fails, use a basic estimation
-    finalEstimate = { min: minLength, max: maxLength };
+  // Fit the head-room every quantifier may add above its minimum: the
+  // largest value whose worst case still fits `maxLength`. Each quantifier
+  // capped at `maxLength` on its own was not enough: nested ones multiply.
+  // Monotonic in `extra`, so a binary search finds it in ~log2(maxLength)
+  // transforms. With no fitting value (an alternation longer than the
+  // budget), the minimum-only form keeps the drawn strings as short as the
+  // pattern allows.
+  let fitted = transformWith(0);
+  if (fitted.estimate.max !== null && fitted.estimate.max <= maxLength) {
+    let low = 1;
+    let high = Math.max(0, maxLength);
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const attempt = transformWith(middle);
+      if (attempt.estimate.max !== null && attempt.estimate.max <= maxLength) {
+        fitted = attempt;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
   }
+
+  const transformedPattern = fitted.pattern;
+  const finalEstimate = fitted.estimate;
 
   // Generate candidates if requested
   const candidates = options.generateCandidates
