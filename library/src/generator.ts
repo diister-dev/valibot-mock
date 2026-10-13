@@ -16,15 +16,45 @@ import { MockGenerationError } from "./errors.ts";
 
 const VOID = Symbol("void");
 
-// RandExp draws from Math.random() internally, silently defeating
-// `faker: { seed }` for every regex-backed value. Its instance `randInt`
-// overrides the prototype's, so route draws through the generator's faker.
-function createSeededRandExp(pattern: RegExp | string, faker: Faker): RandExp {
-  const randexp = new RandExp(pattern);
-  (
-    randexp as unknown as { randInt: (a: number, b: number) => number }
-  ).randInt = (a, b) => faker.number.int({ min: a, max: b });
-  return randexp;
+/**
+ * A compiled RandExp whose draws go through whichever faker is generating
+ * right now.
+ *
+ * RandExp draws from Math.random() internally, silently defeating
+ * `faker: { seed }` for every regex-backed value. Its instance `randInt`
+ * overrides the prototype's, so draws are routed through `faker`, which the
+ * caller sets before each `gen()`: one instance serves every generator and
+ * every seed, and a cached instance never draws from a stale faker.
+ *
+ * `_expand` rebuilds a character class's range on every character drawn
+ * from it; the expansion depends on the token alone, so it is computed once
+ * per token.
+ */
+interface SharedRandExp {
+  randexp: RandExp;
+  faker: Faker | null;
+}
+
+function createSharedRandExp(pattern: string, max: number): SharedRandExp {
+  const shared: SharedRandExp = { randexp: new RandExp(pattern), faker: null };
+  const internals = shared.randexp as unknown as {
+    max: number;
+    randInt: (a: number, b: number) => number;
+    _expand: (token: object) => unknown;
+  };
+  internals.max = max;
+  internals.randInt = (a, b) => shared.faker!.number.int({ min: a, max: b });
+  const expand = internals._expand.bind(shared.randexp);
+  const expanded = new WeakMap<object, unknown>();
+  internals._expand = (token) => {
+    let range = expanded.get(token);
+    if (range === undefined) {
+      range = expand(token);
+      expanded.set(token, range);
+    }
+    return range;
+  };
+  return shared;
 }
 
 const schemaHandlers = {
@@ -422,58 +452,31 @@ function generateRegexString(
     );
   }
 
-  // Without an explicit maxLength the default cap only keeps random noise
-  // short: a pattern whose structure needs more (a 26-char ULID) still gets
-  // its minimum.
-  const structuralMin = estimateMinLength(regex);
-  const maxLength =
-    explicitMaxLength ??
-    Math.max(options.defaultStringMaxLength, structuralMin, minLength);
-
-  const result = regexToStringMinMax(regex, minLength, maxLength, {
-    preferLazy: false,
-    generateCandidates: true,
-    candidateCount: 5,
-  });
-  if (result.infeasible) {
+  const plan = regexPlan(
+    regex,
+    minLength,
+    explicitMaxLength,
+    options.defaultStringMaxLength,
+  );
+  if ("infeasible" in plan) {
     throw new MockGenerationError(
       `Cannot generate a string at "${path}" matching ${String(regex)}: ` +
-        `the pattern needs at least ${result.actualMinLength} characters, maxLength is ${maxLength}`,
+        `the pattern needs at least ${plan.infeasible.actualMinLength} characters, maxLength is ${plan.infeasible.maxLength}`,
       { path, schemaType: "string", pattern: String(regex) },
     );
   }
 
-  // Sources to draw from: the fixed-repetition candidates (exact lengths)
-  // and the budget-fitted pattern when it fits the bounds.
-  const sources: Array<{ pattern: string; max: number }> = [];
-  for (const candidate of result.candidates ?? []) {
-    if (candidate.minLength <= maxLength) {
-      sources.push({
-        pattern: candidate.regex,
-        max: candidate.maxLength ?? maxLength,
-      });
-    }
-  }
-  if (result.isExact || sources.length === 0) {
-    sources.push({
-      pattern: result.transformed,
-      max: result.actualMaxLength ?? maxLength,
-    });
-  }
-
-  // `test` on a global or sticky regex is stateful (`lastIndex`).
-  const matcher = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ""));
-  const generators = new Map<string, RandExp>();
+  const { sources, matcher } = plan;
   for (let attempt = 0; attempt < options.maxRegexAttempts; attempt++) {
     const source =
       sources[faker.number.int({ min: 0, max: sources.length - 1 })]!;
-    let randexp = generators.get(source.pattern);
-    if (!randexp) {
-      randexp = createSeededRandExp(source.pattern, faker);
-      randexp.max = source.max;
-      generators.set(source.pattern, randexp);
+    source.faker = faker;
+    let value: string;
+    try {
+      value = source.randexp.gen();
+    } finally {
+      source.faker = null;
     }
-    const value = randexp.gen();
     if (
       value.length >= minLength &&
       value.length <= upperBound &&
@@ -489,6 +492,94 @@ function generateRegexString(
       ` give the field a fake() or a resolve() hook`,
     { path, schemaType: "string", pattern: String(regex) },
   );
+}
+
+type RegexPlan =
+  | { sources: SharedRandExp[]; matcher: RegExp }
+  | { infeasible: { actualMinLength: number; maxLength: number } };
+
+/**
+ * Everything a regex-backed string needs before its first draw, keyed by the
+ * pattern and the bounds: parsing the pattern, fitting it to the bounds and
+ * compiling the RandExp sources was most of a value's cost when it ran once
+ * per value. Bounded like the transform cache it sits on, so a generator fed
+ * unbounded distinct patterns cannot grow it forever.
+ */
+const REGEX_PLANS = new Map<string, RegexPlan>();
+const REGEX_PLANS_LIMIT = 512;
+
+function regexPlan(
+  regex: RegExp,
+  minLength: number,
+  explicitMaxLength: number | undefined,
+  defaultStringMaxLength: number,
+): RegexPlan {
+  const key = JSON.stringify([
+    regex.source,
+    regex.flags,
+    minLength,
+    explicitMaxLength ?? null,
+    defaultStringMaxLength,
+  ]);
+  const cached = REGEX_PLANS.get(key);
+  if (cached) return cached;
+  const plan = buildRegexPlan(
+    regex,
+    minLength,
+    explicitMaxLength,
+    defaultStringMaxLength,
+  );
+  if (REGEX_PLANS.size >= REGEX_PLANS_LIMIT) {
+    const oldest = REGEX_PLANS.keys().next().value;
+    if (oldest !== undefined) REGEX_PLANS.delete(oldest);
+  }
+  REGEX_PLANS.set(key, plan);
+  return plan;
+}
+
+function buildRegexPlan(
+  regex: RegExp,
+  minLength: number,
+  explicitMaxLength: number | undefined,
+  defaultStringMaxLength: number,
+): RegexPlan {
+  // Without an explicit maxLength the default cap only keeps random noise
+  // short: a pattern whose structure needs more (a 26-char ULID) still gets
+  // its minimum.
+  const structuralMin = estimateMinLength(regex);
+  const maxLength =
+    explicitMaxLength ??
+    Math.max(defaultStringMaxLength, structuralMin, minLength);
+
+  const result = regexToStringMinMax(regex, minLength, maxLength, {
+    preferLazy: false,
+    generateCandidates: true,
+    candidateCount: 5,
+  });
+  if (result.infeasible) {
+    return {
+      infeasible: { actualMinLength: result.actualMinLength, maxLength },
+    };
+  }
+
+  // Sources to draw from: the fixed-repetition candidates (exact lengths)
+  // and the budget-fitted pattern when it fits the bounds.
+  const sources: SharedRandExp[] = [];
+  const addSource = (pattern: string, max: number) => {
+    sources.push(createSharedRandExp(pattern, max));
+  };
+  for (const candidate of result.candidates ?? []) {
+    if (candidate.minLength <= maxLength) {
+      addSource(candidate.regex, candidate.maxLength ?? maxLength);
+    }
+  }
+  if (result.isExact || sources.length === 0) {
+    addSource(result.transformed, result.actualMaxLength ?? maxLength);
+  }
+
+  // `test` on a global or sticky regex is stateful (`lastIndex`).
+  const matcher = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ""));
+  return { sources, matcher };
 }
 
 /**
