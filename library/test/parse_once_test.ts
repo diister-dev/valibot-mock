@@ -77,3 +77,30 @@ test("parse once — what a parse adds still lands", () => {
     assert(v.safeParse(v.object({ a: v.string() }), doc.stripped).success);
   }
 });
+
+test("lazy — an argument-less getter is resolved once, a getter reading its argument every time", () => {
+  let builds = 0;
+  type Node = { label: string; children?: Node[] | undefined };
+  const NodeSchema: v.GenericSchema<Node> = v.lazy(() => {
+    builds++;
+    return v.object({
+      label: v.string(),
+      children: v.optional(v.array(v.lazy(() => NodeSchema))),
+    });
+  });
+  createMockGenerator(v.object({ root: NodeSchema }), {
+    faker: { seed: 11 },
+    defaultArrayMaxLength: 2,
+  }).generateMany(5);
+  assertEquals(builds, 1);
+
+  let reads = 0;
+  const reading = v.lazy((input: unknown) => {
+    reads++;
+    return typeof input === "number" ? v.number() : v.string();
+  });
+  createMockGenerator(v.object({ value: reading }), {
+    faker: { seed: 1 },
+  }).generateMany(3);
+  assert(reads >= 3, `${reads} calls`);
+});

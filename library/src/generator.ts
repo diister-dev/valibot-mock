@@ -384,10 +384,8 @@ const schemaHandlers = {
     return results[0];
   },
 
-  lazy: (schema: any, faker: Faker, context: any, options: any) => {
-    const resolvedSchema = schema.getter({});
-    return handleSchema(resolvedSchema, faker, context, options);
-  },
+  lazy: (schema: any, faker: Faker, context: any, options: any) =>
+    handleSchema(resolveLazy(schema), faker, context, options),
 
   custom: (_schema: any, faker: Faker) => faker.lorem.word(),
   brand: (schema: any, faker: Faker, context: any, options: any) => {
@@ -424,6 +422,26 @@ const schemaHandlers = {
   schemaHandlers["object"];
 (schemaHandlers as Record<string, unknown>)["strict_object"] =
   schemaHandlers["object"];
+
+/**
+ * What a lazy schema's getter returns, resolved once when the getter takes
+ * no argument: such a getter cannot depend on the value, and is taken to
+ * return the same schema every call — the assumption the stability judgement
+ * makes too. A recursive schema (a condition tree whose `and` holds more
+ * conditions) rebuilt its whole definition for every node it generated.
+ * A getter that reads its argument is still called every time.
+ */
+const resolvedLazies = new WeakMap<object, unknown>();
+
+function resolveLazy(schema: any): unknown {
+  if (schema.getter.length > 0) return schema.getter({});
+  let resolved = resolvedLazies.get(schema);
+  if (resolved === undefined) {
+    resolved = schema.getter({});
+    resolvedLazies.set(schema, resolved);
+  }
+  return resolved;
+}
 
 /**
  * Draws a string matching `regex` within the length bounds, or throws a
@@ -726,7 +744,7 @@ function judgeStability(schema: any): boolean {
     return options.every(isStable) && optionsAreExclusive(options);
   }
   if (type === "lazy" && schema.getter.length === 0) {
-    return isStable(schema.getter());
+    return isStable(resolveLazy(schema));
   }
   return false;
 }
