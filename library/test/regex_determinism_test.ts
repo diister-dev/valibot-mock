@@ -47,3 +47,22 @@ test("regex determinism — regex values still satisfy their schema", () => {
     );
   }
 });
+
+test("regex determinism — interleaved generators each keep their own seeded stream", () => {
+  const schema = v.object({
+    id: v.pipe(v.string(), v.regex(/^user:[a-zA-Z0-9]{12}$/)),
+    slug: v.pipe(v.string(), v.regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)),
+  });
+  const alone = (seed: number) =>
+    createMockGenerator(schema, { faker: { seed } }).generateMany(4);
+  const expected = [alone(1), alone(2)];
+
+  const first = createMockGenerator(schema, { faker: { seed: 1 } });
+  const second = createMockGenerator(schema, { faker: { seed: 2 } });
+  const interleaved: unknown[][] = [[], []];
+  for (let i = 0; i < 4; i++) {
+    interleaved[0]!.push(first.generate());
+    interleaved[1]!.push(second.generate());
+  }
+  assertEquals(interleaved, expected);
+});

@@ -16,15 +16,45 @@ import { MockGenerationError } from "./errors.ts";
 
 const VOID = Symbol("void");
 
-// RandExp draws from Math.random() internally, silently defeating
-// `faker: { seed }` for every regex-backed value. Its instance `randInt`
-// overrides the prototype's, so route draws through the generator's faker.
-function createSeededRandExp(pattern: RegExp | string, faker: Faker): RandExp {
-  const randexp = new RandExp(pattern);
-  (
-    randexp as unknown as { randInt: (a: number, b: number) => number }
-  ).randInt = (a, b) => faker.number.int({ min: a, max: b });
-  return randexp;
+/**
+ * A compiled RandExp whose draws go through whichever faker is generating
+ * right now.
+ *
+ * RandExp draws from Math.random() internally, silently defeating
+ * `faker: { seed }` for every regex-backed value. Its instance `randInt`
+ * overrides the prototype's, so draws are routed through `faker`, which the
+ * caller sets before each `gen()`: one instance serves every generator and
+ * every seed, and a cached instance never draws from a stale faker.
+ *
+ * `_expand` rebuilds a character class's range on every character drawn
+ * from it; the expansion depends on the token alone, so it is computed once
+ * per token.
+ */
+interface SharedRandExp {
+  randexp: RandExp;
+  faker: Faker | null;
+}
+
+function createSharedRandExp(pattern: string, max: number): SharedRandExp {
+  const shared: SharedRandExp = { randexp: new RandExp(pattern), faker: null };
+  const internals = shared.randexp as unknown as {
+    max: number;
+    randInt: (a: number, b: number) => number;
+    _expand: (token: object) => unknown;
+  };
+  internals.max = max;
+  internals.randInt = (a, b) => shared.faker!.number.int({ min: a, max: b });
+  const expand = internals._expand.bind(shared.randexp);
+  const expanded = new WeakMap<object, unknown>();
+  internals._expand = (token) => {
+    let range = expanded.get(token);
+    if (range === undefined) {
+      range = expand(token);
+      expanded.set(token, range);
+    }
+    return range;
+  };
+  return shared;
 }
 
 const schemaHandlers = {
@@ -354,10 +384,8 @@ const schemaHandlers = {
     return results[0];
   },
 
-  lazy: (schema: any, faker: Faker, context: any, options: any) => {
-    const resolvedSchema = schema.getter({});
-    return handleSchema(resolvedSchema, faker, context, options);
-  },
+  lazy: (schema: any, faker: Faker, context: any, options: any) =>
+    handleSchema(resolveLazy(schema), faker, context, options),
 
   custom: (_schema: any, faker: Faker) => faker.lorem.word(),
   brand: (schema: any, faker: Faker, context: any, options: any) => {
@@ -396,6 +424,26 @@ const schemaHandlers = {
   schemaHandlers["object"];
 
 /**
+ * What a lazy schema's getter returns, resolved once when the getter takes
+ * no argument: such a getter cannot depend on the value, and is taken to
+ * return the same schema every call — the assumption the stability judgement
+ * makes too. A recursive schema (a condition tree whose `and` holds more
+ * conditions) rebuilt its whole definition for every node it generated.
+ * A getter that reads its argument is still called every time.
+ */
+const resolvedLazies = new WeakMap<object, unknown>();
+
+function resolveLazy(schema: any): unknown {
+  if (schema.getter.length > 0) return schema.getter({});
+  let resolved = resolvedLazies.get(schema);
+  if (resolved === undefined) {
+    resolved = schema.getter({});
+    resolvedLazies.set(schema, resolved);
+  }
+  return resolved;
+}
+
+/**
  * Draws a string matching `regex` within the length bounds, or throws a
  * {@link MockGenerationError} naming the field and the pattern.
  *
@@ -422,58 +470,31 @@ function generateRegexString(
     );
   }
 
-  // Without an explicit maxLength the default cap only keeps random noise
-  // short: a pattern whose structure needs more (a 26-char ULID) still gets
-  // its minimum.
-  const structuralMin = estimateMinLength(regex);
-  const maxLength =
-    explicitMaxLength ??
-    Math.max(options.defaultStringMaxLength, structuralMin, minLength);
-
-  const result = regexToStringMinMax(regex, minLength, maxLength, {
-    preferLazy: false,
-    generateCandidates: true,
-    candidateCount: 5,
-  });
-  if (result.infeasible) {
+  const plan = regexPlan(
+    regex,
+    minLength,
+    explicitMaxLength,
+    options.defaultStringMaxLength,
+  );
+  if ("infeasible" in plan) {
     throw new MockGenerationError(
       `Cannot generate a string at "${path}" matching ${String(regex)}: ` +
-        `the pattern needs at least ${result.actualMinLength} characters, maxLength is ${maxLength}`,
+        `the pattern needs at least ${plan.infeasible.actualMinLength} characters, maxLength is ${plan.infeasible.maxLength}`,
       { path, schemaType: "string", pattern: String(regex) },
     );
   }
 
-  // Sources to draw from: the fixed-repetition candidates (exact lengths)
-  // and the budget-fitted pattern when it fits the bounds.
-  const sources: Array<{ pattern: string; max: number }> = [];
-  for (const candidate of result.candidates ?? []) {
-    if (candidate.minLength <= maxLength) {
-      sources.push({
-        pattern: candidate.regex,
-        max: candidate.maxLength ?? maxLength,
-      });
-    }
-  }
-  if (result.isExact || sources.length === 0) {
-    sources.push({
-      pattern: result.transformed,
-      max: result.actualMaxLength ?? maxLength,
-    });
-  }
-
-  // `test` on a global or sticky regex is stateful (`lastIndex`).
-  const matcher = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ""));
-  const generators = new Map<string, RandExp>();
+  const { sources, matcher } = plan;
   for (let attempt = 0; attempt < options.maxRegexAttempts; attempt++) {
     const source =
       sources[faker.number.int({ min: 0, max: sources.length - 1 })]!;
-    let randexp = generators.get(source.pattern);
-    if (!randexp) {
-      randexp = createSeededRandExp(source.pattern, faker);
-      randexp.max = source.max;
-      generators.set(source.pattern, randexp);
+    source.faker = faker;
+    let value: string;
+    try {
+      value = source.randexp.gen();
+    } finally {
+      source.faker = null;
     }
-    const value = randexp.gen();
     if (
       value.length >= minLength &&
       value.length <= upperBound &&
@@ -489,6 +510,94 @@ function generateRegexString(
       ` give the field a fake() or a resolve() hook`,
     { path, schemaType: "string", pattern: String(regex) },
   );
+}
+
+type RegexPlan =
+  | { sources: SharedRandExp[]; matcher: RegExp }
+  | { infeasible: { actualMinLength: number; maxLength: number } };
+
+/**
+ * Everything a regex-backed string needs before its first draw, keyed by the
+ * pattern and the bounds: parsing the pattern, fitting it to the bounds and
+ * compiling the RandExp sources was most of a value's cost when it ran once
+ * per value. Bounded like the transform cache it sits on, so a generator fed
+ * unbounded distinct patterns cannot grow it forever.
+ */
+const REGEX_PLANS = new Map<string, RegexPlan>();
+const REGEX_PLANS_LIMIT = 512;
+
+function regexPlan(
+  regex: RegExp,
+  minLength: number,
+  explicitMaxLength: number | undefined,
+  defaultStringMaxLength: number,
+): RegexPlan {
+  const key = JSON.stringify([
+    regex.source,
+    regex.flags,
+    minLength,
+    explicitMaxLength ?? null,
+    defaultStringMaxLength,
+  ]);
+  const cached = REGEX_PLANS.get(key);
+  if (cached) return cached;
+  const plan = buildRegexPlan(
+    regex,
+    minLength,
+    explicitMaxLength,
+    defaultStringMaxLength,
+  );
+  if (REGEX_PLANS.size >= REGEX_PLANS_LIMIT) {
+    const oldest = REGEX_PLANS.keys().next().value;
+    if (oldest !== undefined) REGEX_PLANS.delete(oldest);
+  }
+  REGEX_PLANS.set(key, plan);
+  return plan;
+}
+
+function buildRegexPlan(
+  regex: RegExp,
+  minLength: number,
+  explicitMaxLength: number | undefined,
+  defaultStringMaxLength: number,
+): RegexPlan {
+  // Without an explicit maxLength the default cap only keeps random noise
+  // short: a pattern whose structure needs more (a 26-char ULID) still gets
+  // its minimum.
+  const structuralMin = estimateMinLength(regex);
+  const maxLength =
+    explicitMaxLength ??
+    Math.max(defaultStringMaxLength, structuralMin, minLength);
+
+  const result = regexToStringMinMax(regex, minLength, maxLength, {
+    preferLazy: false,
+    generateCandidates: true,
+    candidateCount: 5,
+  });
+  if (result.infeasible) {
+    return {
+      infeasible: { actualMinLength: result.actualMinLength, maxLength },
+    };
+  }
+
+  // Sources to draw from: the fixed-repetition candidates (exact lengths)
+  // and the budget-fitted pattern when it fits the bounds.
+  const sources: SharedRandExp[] = [];
+  const addSource = (pattern: string, max: number) => {
+    sources.push(createSharedRandExp(pattern, max));
+  };
+  for (const candidate of result.candidates ?? []) {
+    if (candidate.minLength <= maxLength) {
+      addSource(candidate.regex, candidate.maxLength ?? maxLength);
+    }
+  }
+  if (result.isExact || sources.length === 0) {
+    addSource(result.transformed, result.actualMaxLength ?? maxLength);
+  }
+
+  // `test` on a global or sticky regex is stateful (`lastIndex`).
+  const matcher = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ""));
+  return { sources, matcher };
 }
 
 /**
@@ -513,6 +622,240 @@ function generateNonEmpty(
   throw new Error(
     `Could not generate a non-empty value for ${schema.type} in ${options.maxAttempts} attempts`,
   );
+}
+
+/**
+ * Transformations that leave a value they already produced unchanged, so a
+ * second parse of their output returns it as is.
+ */
+const IDEMPOTENT_TRANSFORMATIONS = new Set([
+  "brand",
+  "readonly",
+  "trim",
+  "trim_start",
+  "trim_end",
+  "to_lower_case",
+  "to_upper_case",
+]);
+
+/** Types whose parse returns its input, given a stable pipe. */
+const LEAF_TYPES = new Set([
+  "string",
+  "number",
+  "bigint",
+  "boolean",
+  "date",
+  "literal",
+  "picklist",
+  "enum",
+  "null",
+  "undefined",
+  "void",
+  "any",
+  "unknown",
+  "custom",
+  "file",
+  "blob",
+]);
+
+const WRAPPER_TYPES = new Set([
+  "optional",
+  "nullable",
+  "nullish",
+  "non_nullable",
+  "non_nullish",
+  "non_optional",
+]);
+
+const OBJECT_TYPES = new Set(["object", "loose_object", "strict_object"]);
+
+/**
+ * Whether parsing a value this schema already output returns that value
+ * unchanged — so a parent that composed it from such values need not parse
+ * it again.
+ *
+ * Conservative: an unknown type, a transformation that is not idempotent, a
+ * union whose options a value could satisfy more than one of (see
+ * {@link optionsAreExclusive}), an intersect, map or set all answer false.
+ * A lazy schema whose getter takes no argument is judged on what the getter
+ * returns, once: such a getter ignores the value, and is taken to return
+ * the same schema every call. Recursion through a lazy schema is assumed
+ * stable while it is being judged (the answer is the greatest fixpoint).
+ */
+const stability = new WeakMap<object, boolean>();
+
+/** Nodes judged stable during the current top-level judgement. */
+let judgedStable: object[] | null = null;
+
+function isStable(schema: any): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const known = stability.get(schema);
+  if (known !== undefined) return known;
+  const topLevel = judgedStable === null;
+  if (topLevel) judgedStable = [];
+  try {
+    stability.set(schema, true);
+    const stable = judgeStability(schema);
+    stability.set(schema, stable);
+    if (stable) judgedStable!.push(schema);
+    // Every rule is a conjunction over the children, so a node judged
+    // unstable makes every node above it unstable too: when the top-level
+    // answer is false, a "stable" reached under the assumption that some
+    // node above was stable may be wrong — forget those, they are judged
+    // again on their own.
+    if (topLevel && !stable) {
+      for (const node of judgedStable!) stability.delete(node);
+    }
+    return stable;
+  } finally {
+    if (topLevel) judgedStable = null;
+  }
+}
+
+function hasStablePipe(schema: any): boolean {
+  if (!schema.pipe) return true;
+  return (schema.pipe as any[]).every((item, index) => {
+    if (index === 0) return true;
+    if (item.kind === "schema") return isStable(item);
+    if (item.kind === "transformation") {
+      return IDEMPOTENT_TRANSFORMATIONS.has(item.type);
+    }
+    return true;
+  });
+}
+
+function judgeStability(schema: any): boolean {
+  if (!hasStablePipe(schema)) return false;
+  if (schema.pipe?.[0]?.kind === "schema" && schema.pipe[0] !== schema) {
+    if (!isStable(schema.pipe[0])) return false;
+  }
+  const type: string = schema.type;
+  if (LEAF_TYPES.has(type)) return true;
+  if (WRAPPER_TYPES.has(type)) return isStable(schema.wrapped);
+  if (OBJECT_TYPES.has(type)) {
+    return Object.values(schema.entries).every(isStable);
+  }
+  if (type === "array") return isStable(schema.item);
+  if (type === "tuple") return (schema.items as any[]).every(isStable);
+  if (type === "record") return isStable(schema.key) && isStable(schema.value);
+  if (type === "variant") return (schema.options as any[]).every(isStable);
+  if (type === "union") {
+    const options = schema.options as any[];
+    return options.every(isStable) && optionsAreExclusive(options);
+  }
+  if (type === "lazy" && schema.getter.length === 0) {
+    return isStable(resolveLazy(schema));
+  }
+  return false;
+}
+
+/**
+ * Whether no value one option outputs can be accepted by another option —
+ * then a re-parse picks the option the first parse picked. A union parse
+ * takes the FIRST option that accepts; an object option strips unknown keys,
+ * and the stripped value could be accepted by an earlier option that refused
+ * the original. Options are exclusive when they are of different kinds
+ * (scalar, object, array) and their scalars are typed, or when every object
+ * option carries one literal key with values no other option shares.
+ */
+function optionsAreExclusive(options: any[]): boolean {
+  const kinds = options.map(kindOf);
+  if (kinds.includes(undefined)) return false;
+  const objects = options.filter((_, index) => kinds[index] === "object");
+  const arrays = kinds.filter((kind) => kind === "array").length;
+  if (arrays > 1) return false;
+  return objects.length <= 1 || hasDiscriminatingLiteral(objects);
+}
+
+const SCALAR_TYPES = new Set([
+  "string",
+  "number",
+  "bigint",
+  "boolean",
+  "date",
+  "literal",
+  "picklist",
+  "enum",
+  "null",
+  "undefined",
+  "void",
+]);
+
+function kindOf(schema: any): "scalar" | "object" | "array" | undefined {
+  if (SCALAR_TYPES.has(schema.type)) return "scalar";
+  if (OBJECT_TYPES.has(schema.type)) return "object";
+  if (schema.type === "array") return "array";
+  if (WRAPPER_TYPES.has(schema.type)) return kindOf(schema.wrapped);
+  return undefined;
+}
+
+function unwrapObject(schema: any): any {
+  return WRAPPER_TYPES.has(schema.type) ? unwrapObject(schema.wrapped) : schema;
+}
+
+function literalValues(schema: any): unknown[] | undefined {
+  if (schema?.type === "literal") return [schema.literal];
+  if (schema?.type === "picklist") return schema.options;
+  return undefined;
+}
+
+function hasDiscriminatingLiteral(objects: any[]): boolean {
+  const entries = objects.map((schema) => unwrapObject(schema).entries);
+  for (const key of Object.keys(entries[0])) {
+    const seen = new Set<unknown>();
+    let discriminates = true;
+    for (const objectEntries of entries) {
+      const values = literalValues(objectEntries[key]);
+      if (!values || values.some((value) => seen.has(value))) {
+        discriminates = false;
+        break;
+      }
+      for (const value of values) seen.add(value);
+    }
+    if (discriminates) return true;
+  }
+  return false;
+}
+
+/** Container types whose own parse adds nothing to their children's. */
+const COMPOSING_TYPES = new Set([
+  "object",
+  "loose_object",
+  "strict_object",
+  "array",
+  "tuple",
+  "optional",
+  "nullable",
+  "nullish",
+  "lazy",
+]);
+
+/**
+ * Whether the value a handler composes for `schema` is already the value
+ * `safeParse(schema, value)` would return: a container with no pipe of its
+ * own (no validation at its level), no default to fill in, whose children
+ * were each parsed by their own `handleSchema` and are stable under a second
+ * parse. Unions and variants stay parsed: their parse may pick another option
+ * than the one drawn. A record stays parsed: its parse drops keys such as
+ * `__proto__`.
+ *
+ * Parsing a composed node again re-parsed its whole subtree: a document was
+ * parsed once per level of nesting, and every parse of a lazy schema rebuilt
+ * it through its getter.
+ */
+const composedIsParsed = new WeakMap<object, boolean>();
+
+function parseIsRedundant(schema: any): boolean {
+  let known = composedIsParsed.get(schema);
+  if (known === undefined) {
+    known =
+      COMPOSING_TYPES.has(schema.type) &&
+      !schema.pipe &&
+      schema.default === undefined &&
+      isStable(schema);
+    composedIsParsed.set(schema, known);
+  }
+  return known;
 }
 
 /** First issue of a failed parse, path and message, truncated. */
@@ -624,6 +967,7 @@ function handleSchema(
   // Use default handlers
   const handler = schemaHandlers[schema.type as keyof typeof schemaHandlers];
   if (handler) {
+    const redundantParse = parseIsRedundant(originalSchema);
     let maxAttempts = options.maxAttempts;
     let result = null;
     while (maxAttempts > 0) {
@@ -631,6 +975,7 @@ function handleSchema(
       if (result === VOID) {
         result = undefined;
       }
+      if (redundantParse) return result;
       const valid = v.safeParse(originalSchema, result);
       if (valid.success) {
         return valid.output;
